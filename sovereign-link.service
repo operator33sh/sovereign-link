@@ -1,0 +1,15 @@
+[Unit]
+Description=Sovereign-Link Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=wouter
+WorkingDirectory=/home/wouter/Development/sovereign-link
+EnvironmentFile=/home/wouter/Development/sovereign-link/.env
+ExecStart=/home/wouter/Development/sovereign-link/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
