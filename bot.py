@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime
 
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 import context
@@ -92,8 +92,16 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(reply)
 
 
+async def _set_commands(app: Application) -> None:
+    await app.bot.set_my_commands([
+        BotCommand("start", "Check if the bot is online"),
+        BotCommand("clear", "Clear the current session context"),
+        BotCommand("vault", "Save last 5 exchanges as a vault note: /vault <file.md>"),
+    ])
+
+
 def build_app() -> Application:
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).post_init(_set_commands).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("vault", cmd_vault))
