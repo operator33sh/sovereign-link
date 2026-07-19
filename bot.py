@@ -40,13 +40,10 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
 
-    args = ctx.args
-    if not args:
-        await update.message.reply_text("Usage: /vault <file_name.md>")
-        return
-
-    file_name = args[0]
     await update.message.chat.send_action("typing")
+
+    timestamp = datetime.now()
+    file_name = f"vault_{timestamp.strftime('%Y_%m_%d_%H%M')}.md"
 
     # Take last 10 messages (5 exchanges) from session history
     recent = context.get_history()[-10:]
@@ -61,8 +58,7 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Error generating summary: {e}")
         return
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    note = f"## {timestamp} — {file_name}\n\n{summary}\n"
+    note = f"## {timestamp.strftime('%Y-%m-%d %H:%M:%S')} — {file_name}\n\n{summary}\n"
 
     write_result = write_vault(file_name, note)
     sync_result = sync_vault()
@@ -96,7 +92,7 @@ async def _set_commands(app: Application) -> None:
     await app.bot.set_my_commands([
         BotCommand("start", "Check if the bot is online"),
         BotCommand("clear", "Clear the current session context"),
-        BotCommand("vault", "Save last 5 exchanges as a vault note: /vault <file.md>"),
+        BotCommand("vault", "Save last 5 exchanges as a vault note"),
     ])
 
 
