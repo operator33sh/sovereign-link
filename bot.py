@@ -1,11 +1,13 @@
 import logging
 import os
+from datetime import datetime
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 import context
 import llm
+from tools import write_vault, sync_vault
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -34,6 +36,43 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Context cleared.")
 
 
+async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+
+    args = ctx.args
+    if not args:
+        await update.message.reply_text("Usage: /vault <file_name.md>")
+        return
+
+    file_name = args[0]
+    await update.message.chat.send_action("typing")
+
+    # Take last 10 messages (5 exchanges) from session history
+    recent = context.get_history()[-10:]
+    if not recent:
+        await update.message.reply_text("No conversation history to summarize.")
+        return
+
+    try:
+        summary = llm.summarize_to_vault(recent)
+    except Exception as e:
+        logger.exception("Summarize error")
+        await update.message.reply_text(f"Error generating summary: {e}")
+        return
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    note = f"## {timestamp} — {file_name}\n\n{summary}\n"
+
+    write_result = write_vault(file_name, note)
+    sync_result = sync_vault()
+
+    await update.message.reply_text(
+        f"Vault note saved to `{file_name}`.\n\n{write_result}\n{sync_result}",
+        parse_mode="Markdown",
+    )
+
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -57,5 +96,6 @@ def build_app() -> Application:
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
+    app.add_handler(CommandHandler("vault", cmd_vault))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return app

@@ -36,6 +36,29 @@ def _chat(messages: list) -> dict:
     return response.json()
 
 
+def summarize_to_vault(recent_messages: list) -> str:
+    """Ask the LLM to summarize insights from a list of messages. No tools."""
+    conversation = "\n".join(
+        f"{m['role'].upper()}: {m.get('content', '')}"
+        for m in recent_messages
+        if m.get("content")
+    )
+    prompt = (
+        "Summarize the key insights, decisions, and information from the following "
+        "conversation into a concise vault note. Write in clear, structured markdown. "
+        "Do not include greetings or meta-commentary — only the substance.\n\n"
+        f"{conversation}"
+    )
+    payload = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+    response = _client.post("/v1/chat/completions", json=payload)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"].get("content", "")
+
+
 def run(user_message: str) -> str:
     context.add_message("user", user_message)
 
