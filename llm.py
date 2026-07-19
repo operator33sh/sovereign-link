@@ -39,10 +39,9 @@ def _chat(messages: list) -> dict:
 def run(user_message: str) -> str:
     context.add_message("user", user_message)
 
-    timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + context.get_history()
-    # Postfix timestamp on the last user message (invisible to Telegram, visible to LLM)
-    messages[-1] = {**messages[-1], "content": f"{messages[-1]['content']} {timestamp}"}
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    system_with_time = f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
+    messages = [{"role": "system", "content": system_with_time}] + context.get_history()
 
     # Tool call loop — at most 5 iterations to prevent infinite loops
     for _ in range(5):
