@@ -36,18 +36,20 @@ def _chat(messages: list) -> dict:
     return response.json()
 
 
-def summarize_to_vault(recent_messages: list) -> str:
-    """Ask the LLM to summarize insights from a list of messages. No tools."""
+def summarize_to_vault(recent_messages: list) -> dict:
+    """Ask the LLM to summarize insights and generate a Dutch title. Returns {titel, samenvatting}."""
     conversation = "\n".join(
         f"{m['role'].upper()}: {m.get('content', '')}"
         for m in recent_messages
         if m.get("content")
     )
     prompt = (
-        "Summarize the key insights, decisions, and information from the following "
-        "conversation into a concise vault note. Write in clear, structured markdown. "
-        "Do not include greetings or meta-commentary — only the substance.\n\n"
-        f"{conversation}"
+        "Analyseer het volgende gesprek en geef je antwoord als JSON met exact twee velden:\n"
+        '- "titel": een korte Nederlandse titel (3-6 woorden, geen leestekens behalve koppeltekens)\n'
+        '- "samenvatting": een beknopte samenvatting in gestructureerd Nederlandstalig markdown van de '
+        "belangrijkste inzichten, besluiten en informatie. Geen begroetingen of meta-commentaar.\n\n"
+        f"Gesprek:\n{conversation}\n\n"
+        "Geef alleen de JSON terug, niets anders."
     )
     payload = {
         "model": MODEL,
@@ -56,7 +58,13 @@ def summarize_to_vault(recent_messages: list) -> str:
     }
     response = _client.post("/v1/chat/completions", json=payload)
     response.raise_for_status()
-    return response.json()["choices"][0]["message"].get("content", "")
+    raw = response.json()["choices"][0]["message"].get("content", "")
+    try:
+        # Strip markdown code fences if present
+        clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        return {"titel": "aantekening", "samenvatting": raw}
 
 
 def run(user_message: str) -> str:

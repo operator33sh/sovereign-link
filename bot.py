@@ -43,28 +43,33 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.chat.send_action("typing")
 
     timestamp = datetime.now()
-    file_name = f"vault_{timestamp.strftime('%Y_%m_%d_%H%M')}.md"
 
     # Take last 10 messages (5 exchanges) from session history
     recent = context.get_history()[-10:]
     if not recent:
-        await update.message.reply_text("No conversation history to summarize.")
+        await update.message.reply_text("Geen gespreksgeschiedenis om samen te vatten.")
         return
 
     try:
-        summary = llm.summarize_to_vault(recent)
+        result = llm.summarize_to_vault(recent)
     except Exception as e:
         logger.exception("Summarize error")
-        await update.message.reply_text(f"Error generating summary: {e}")
+        await update.message.reply_text(f"Fout bij samenvatten: {e}")
         return
 
-    note = f"## {timestamp.strftime('%Y-%m-%d %H:%M:%S')} — {file_name}\n\n{summary}\n"
+    titel = result.get("titel", "aantekening").strip().replace(" ", "-")
+    samenvatting = result.get("samenvatting", "")
+    date_str = timestamp.strftime("%Y-%m-%d")
+    time_str = timestamp.strftime("%H-%M")
+    file_name = f"{date_str}_{time_str}_{titel}.md"
+
+    note = f"## {timestamp.strftime('%Y-%m-%d %H:%M')} — {titel.replace('-', ' ')}\n\n{samenvatting}\n"
 
     write_result = write_vault(file_name, note)
     sync_result = sync_vault()
 
     await update.message.reply_text(
-        f"Vault note saved to `{file_name}`.\n\n{write_result}\n{sync_result}",
+        f"Vault notitie opgeslagen als `{file_name}`.\n\n{write_result}\n{sync_result}",
         parse_mode="Markdown",
     )
 
