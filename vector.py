@@ -3,7 +3,7 @@ import os
 import chromadb
 import httpx
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+EMBED_BASE_URL = os.environ.get("EMBED_BASE_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 CHROMA_PATH = os.environ.get("CHROMA_PATH", os.path.expanduser("~/.sovereign-link/chroma"))
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
@@ -19,7 +19,7 @@ _embed_client = httpx.Client(timeout=60.0)
 
 def _embed(text: str) -> list:
     response = _embed_client.post(
-        f"{OLLAMA_BASE_URL}/api/embeddings",
+        f"{EMBED_BASE_URL}/api/embeddings",
         json={"model": EMBED_MODEL, "prompt": text},
     )
     response.raise_for_status()
@@ -58,6 +58,18 @@ def index_file(file_name: str, content: str) -> None:
         documents=[c["text"] for c in chunks],
         metadatas=[c["metadata"] for c in chunks],
     )
+
+
+def random_chunk() -> str | None:
+    """Return a random document chunk from the vault collection, or None if empty."""
+    import random
+    total = _collection.count()
+    if total == 0:
+        return None
+    offset = random.randint(0, total - 1)
+    result = _collection.get(limit=1, offset=offset, include=["documents"])
+    docs = result.get("documents", [])
+    return docs[0] if docs else None
 
 
 def search_vault_semantic(query: str, n_results: int = 5) -> str:

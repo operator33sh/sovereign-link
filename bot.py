@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 import context
 import llm
+import vector
 from tools import write_vault, sync_vault
 
 logging.basicConfig(
@@ -85,6 +86,37 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_whisper(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+
+    chunk = vector.random_chunk()
+    if not chunk:
+        await update.message.reply_text("Vector index is leeg. Voer eerst ingest.py uit.")
+        return
+
+    async def keep_typing():
+        while True:
+            try:
+                await update.message.chat.send_action("typing")
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    typing_task = asyncio.create_task(keep_typing())
+    try:
+        tweet = await asyncio.to_thread(llm.whisper_tweet, chunk)
+    except Exception as e:
+        logger.exception("Whisper error")
+        typing_task.cancel()
+        await update.message.reply_text(f"Fout bij whisper: {e}")
+        return
+    finally:
+        typing_task.cancel()
+
+    await update.message.reply_text(tweet)
+
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -117,6 +149,7 @@ async def _set_commands(app: Application) -> None:
         BotCommand("start", "Check if the bot is online"),
         BotCommand("clear", "Clear the current session context"),
         BotCommand("vault", "Save last 5 exchanges as a vault note"),
+        BotCommand("whisper", "Generate a tweet from a random vault insight"),
     ])
 
 
@@ -125,5 +158,6 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("vault", cmd_vault))
+    app.add_handler(CommandHandler("whisper", cmd_whisper))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return app

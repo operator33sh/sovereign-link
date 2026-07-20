@@ -67,6 +67,24 @@ def summarize_to_vault(recent_messages: list) -> dict:
         return {"titel": "aantekening", "samenvatting": raw}
 
 
+def whisper_tweet(chunk: str) -> str:
+    """Generate a ~200 character English tweet with hashtags based on a vault chunk."""
+    prompt = (
+        "Based on the following insight from a personal knowledge vault, write a single tweet in English. "
+        "Requirements: max 200 characters, include 2-3 relevant hashtags, no quotes around the tweet, "
+        "make it thought-provoking and sharp. Return only the tweet text, nothing else.\n\n"
+        f"Insight:\n{chunk[:800]}"
+    )
+    payload = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+    response = _client.post("/v1/chat/completions", json=payload)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"].get("content", "").strip()
+
+
 def run(user_message: str) -> str:
     context.add_message("user", user_message)
 
