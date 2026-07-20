@@ -1,6 +1,8 @@
 import os
 import subprocess
 
+from vector import index_file, search_vault_semantic as _search_vault_semantic
+
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
 
@@ -25,6 +27,7 @@ def write_vault(file_name: str, content: str) -> str:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+        index_file(file_name, content)
         return f"Written successfully to '{file_name}'"
     except Exception as e:
         return f"Error writing file: {e}"
@@ -101,10 +104,32 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_vault_semantic",
+            "description": (
+                "Semantic search across the entire fractalisme vault using vector embeddings. "
+                "Use this to find relevant notes by meaning and context rather than exact filenames. "
+                "Returns the top 5 most relevant text fragments."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query in natural language.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
     "read_vault": lambda args: read_vault(args["file_name"]),
     "write_vault": lambda args: write_vault(args["file_name"], args["content"]),
     "sync_vault": lambda args: sync_vault(),
+    "search_vault_semantic": lambda args: _search_vault_semantic(args["query"]),
 }
