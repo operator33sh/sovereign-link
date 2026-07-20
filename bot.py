@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from datetime import datetime
@@ -40,8 +41,6 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
 
-    await update.message.chat.send_action("typing")
-
     timestamp = datetime.now()
 
     # Take last 10 messages (5 exchanges) from session history
@@ -50,12 +49,24 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Geen gespreksgeschiedenis om samen te vatten.")
         return
 
+    async def keep_typing():
+        while True:
+            try:
+                await update.message.chat.send_action("typing")
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    typing_task = asyncio.create_task(keep_typing())
     try:
-        result = llm.summarize_to_vault(recent)
+        result = await asyncio.to_thread(llm.summarize_to_vault, recent)
     except Exception as e:
         logger.exception("Summarize error")
+        typing_task.cancel()
         await update.message.reply_text(f"Fout bij samenvatten: {e}")
         return
+    finally:
+        typing_task.cancel()
 
     titel = result.get("titel", "aantekening").strip().replace(" ", "-")
     samenvatting = result.get("samenvatting", "")
@@ -81,14 +92,22 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     user_text = update.message.text
     logger.info("Received message: %s", user_text[:80])
 
-    # Send typing indicator
-    await update.message.chat.send_action("typing")
+    async def keep_typing():
+        while True:
+            try:
+                await update.message.chat.send_action("typing")
+            except Exception:
+                pass
+            await asyncio.sleep(4)
 
+    typing_task = asyncio.create_task(keep_typing())
     try:
-        reply = llm.run(user_text)
+        reply = await asyncio.to_thread(llm.run, user_text)
     except Exception as e:
         logger.exception("LLM error")
         reply = f"Error: {e}"
+    finally:
+        typing_task.cancel()
 
     await update.message.reply_text(reply)
 
