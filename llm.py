@@ -85,6 +85,34 @@ def whisper_tweet(chunk: str) -> str:
     return response.json()["choices"][0]["message"].get("content", "").strip()
 
 
+def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jpeg") -> str:
+    """Send a user message with an inline base64 image to the LLM and return the reply."""
+    prompt = user_message or "What is in this image?"
+    user_content = [
+        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
+        {"type": "text", "text": prompt},
+    ]
+    context.add_message("user", prompt)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    system_with_time = f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
+
+    # Build history but replace the last user message with the multimodal content block
+    history = context.get_history()[:-1]  # drop the text-only user msg we just added
+    messages = (
+        [{"role": "system", "content": system_with_time}]
+        + history
+        + [{"role": "user", "content": user_content}]
+    )
+
+    payload = {"model": MODEL, "messages": messages, "stream": False}
+    response = _client.post("/v1/chat/completions", json=payload)
+    response.raise_for_status()
+    text = response.json()["choices"][0]["message"].get("content", "").strip()
+    context.add_message("assistant", text)
+    return text
+
+
 def run(user_message: str) -> str:
     context.add_message("user", user_message)
 

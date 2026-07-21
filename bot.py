@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import logging
 import os
 from datetime import datetime
@@ -117,6 +118,48 @@ async def cmd_whisper(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(tweet)
 
 
+async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+
+    photo = update.message.photo[-1]  # largest available size
+    caption = update.message.caption or ""
+    logger.info("Received photo file_id=%s caption=%r", photo.file_id, caption[:80])
+
+    status = await update.message.reply_text("Processing image...")
+
+    try:
+        tg_file = await ctx.bot.get_file(photo.file_id)
+        image_bytes = await tg_file.download_as_bytearray()
+    except Exception as e:
+        logger.exception("Photo download error")
+        await status.edit_text(f"Could not download image: {e}")
+        return
+
+    image_b64 = base64.b64encode(image_bytes).decode()
+
+    async def keep_typing():
+        while True:
+            try:
+                await update.message.chat.send_action("typing")
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    typing_task = asyncio.create_task(keep_typing())
+    try:
+        reply = await asyncio.to_thread(llm.run_with_image, caption, image_b64)
+    except Exception as e:
+        logger.exception("LLM image error")
+        typing_task.cancel()
+        await status.edit_text(f"Error: {e}")
+        return
+    finally:
+        typing_task.cancel()
+
+    await status.edit_text(reply)
+
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -159,5 +202,6 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("vault", cmd_vault))
     app.add_handler(CommandHandler("whisper", cmd_whisper))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return app
