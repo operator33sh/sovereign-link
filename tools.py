@@ -1,5 +1,10 @@
 import os
+import random
 import subprocess
+from urllib.parse import urlparse
+
+import httpx
+import trafilatura
 
 from vector import index_file, search_vault_semantic as _search_vault_semantic
 
@@ -51,6 +56,58 @@ def sync_vault() -> str:
         return "Error: git operation timed out"
     except Exception as e:
         return f"Error during sync: {e}"
+
+
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+]
+
+_MAX_CONTENT_CHARS = 8000
+
+
+def analyze_website(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return "Error: only HTTP/HTTPS URLs are allowed"
+
+    headers = {
+        "User-Agent": random.choice(_USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+
+    try:
+        response = httpx.get(url, headers=headers, follow_redirects=True, timeout=20.0)
+    except httpx.TimeoutException:
+        return "Error: request timed out"
+    except Exception as e:
+        return f"Error fetching URL: {e}"
+
+    if response.status_code == 403:
+        return "Error: access forbidden (403) — the site blocked the request"
+    if response.status_code == 429:
+        return "Error: rate limited (429) — try again later"
+    if response.status_code >= 400:
+        return f"Error: HTTP {response.status_code}"
+
+    extracted = trafilatura.extract(
+        response.text,
+        output_format="markdown",
+        include_comments=False,
+        include_tables=True,
+        no_fallback=False,
+    )
+
+    if not extracted:
+        return "Error: could not extract readable content from this page"
+
+    if len(extracted) > _MAX_CONTENT_CHARS:
+        extracted = extracted[:_MAX_CONTENT_CHARS] + f"\n\n[... truncated at {_MAX_CONTENT_CHARS} chars ...]"
+
+    return extracted
 
 
 TOOL_DEFINITIONS = [
@@ -107,6 +164,28 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "analyze_website",
+            "description": (
+                "Fetch and extract the main readable content of a webpage as Markdown. "
+                "Use this when the user shares a URL or asks what a website says. "
+                "Strips navigation, ads, and boilerplate. Content is capped at 8000 chars. "
+                "Only HTTP/HTTPS URLs are supported."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The full URL to fetch (must start with http:// or https://).",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_vault_semantic",
             "description": (
                 "Semantic search across the entire fractalisme vault using vector embeddings. "
@@ -132,4 +211,5 @@ TOOL_HANDLERS = {
     "write_vault": lambda args: write_vault(args["file_name"], args["content"]),
     "sync_vault": lambda args: sync_vault(),
     "search_vault_semantic": lambda args: _search_vault_semantic(args["query"]),
+    "analyze_website": lambda args: analyze_website(args["url"]),
 }
