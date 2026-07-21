@@ -99,20 +99,48 @@ def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jp
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     system_with_time = f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
 
-    # Build history but replace the last user message with the multimodal content block
-    history = context.get_history()[:-1]  # drop the text-only user msg we just added
+    # Strip tool_calls/tool messages from history — Ollama chokes on those mixed with vision input
+    safe_history = [
+        m for m in context.get_history()[:-1]
+        if m.get("role") not in ("tool",)
+        and not m.get("tool_calls")
+        and isinstance(m.get("content"), str)
+    ]
     messages = (
         [{"role": "system", "content": system_with_time}]
-        + history
+        + safe_history
         + [{"role": "user", "content": user_content}]
     )
 
-    payload = {"model": MODEL, "messages": messages, "stream": False}
-    response = _client.post("/v1/chat/completions", json=payload)
-    response.raise_for_status()
-    text = response.json()["choices"][0]["message"].get("content", "").strip()
-    context.add_message("assistant", text)
-    return text
+    for _ in range(5):
+        data = _chat(messages)
+        choice = data["choices"][0]
+        message = choice["message"]
+        finish_reason = choice.get("finish_reason", "stop")
+
+        if finish_reason == "tool_calls" or message.get("tool_calls"):
+            tool_calls = message["tool_calls"]
+            context.add_assistant_with_tool_calls(tool_calls)
+            messages.append({"role": "assistant", "tool_calls": tool_calls})
+
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
+                handler = TOOL_HANDLERS.get(fn_name)
+                result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
+                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result}
+                context.add_tool_result(tc["id"], result)
+                messages.append(tool_msg)
+            continue
+
+        text = message.get("content") or ""
+        context.add_message("assistant", text)
+        return text
+
+    return "Error: tool call loop exceeded maximum iterations"
 
 
 def run(user_message: str) -> str:
