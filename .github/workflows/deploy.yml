@@ -1,0 +1,23 @@
+name: Deploy Sovereign-Link
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and Deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: sovereignresonance.org
+          username: wouter
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/Development/sovereign-link
+            git pull origin main
+            # Update venv if requirements changed
+            .venv/bin/pip install -r requirements.txt
+            sudo systemctl restart sovereign-link
