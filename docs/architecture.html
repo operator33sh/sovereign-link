@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sovereign-Link — Architecture</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222533;
+    --border: #2e3245;
+    --accent: #7c6aff;
+    --accent2: #4fc3f7;
+    --green: #69f0ae;
+    --orange: #ffab40;
+    --red: #ef5350;
+    --text: #e2e4ef;
+    --muted: #7a7f9a;
+    --code: #c792ea;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 2rem; font-weight: 700; color: var(--accent); margin-bottom: .25rem; }
+  h2 { font-size: 1.25rem; font-weight: 600; color: var(--accent2); margin: 2rem 0 .75rem; border-bottom: 1px solid var(--border); padding-bottom: .4rem; }
+  h3 { font-size: 1rem; font-weight: 600; color: var(--orange); margin-bottom: .5rem; }
+  p { color: var(--muted); margin-bottom: .5rem; font-size: .95rem; }
+  code { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: .85rem; color: var(--code); background: var(--surface2); padding: .1em .35em; border-radius: 4px; }
+  .subtitle { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+
+  /* Grid */
+  .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    transition: border-color .2s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card-header { display: flex; align-items: center; gap: .6rem; margin-bottom: .6rem; }
+  .badge {
+    font-size: .7rem;
+    font-weight: 600;
+    padding: .2em .6em;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    white-space: nowrap;
+  }
+  .badge-entry    { background: #7c6aff33; color: var(--accent); }
+  .badge-telegram { background: #4fc3f733; color: var(--accent2); }
+  .badge-llm      { background: #ffab4033; color: var(--orange); }
+  .badge-state    { background: #69f0ae33; color: var(--green); }
+  .badge-vector   { background: #ef535033; color: var(--red); }
+  .badge-tools    { background: #ce93d833; color: #ce93d8; }
+  .badge-script   { background: #80cbc433; color: #80cbc4; }
+  .filename { font-size: 1rem; font-weight: 700; color: var(--text); }
+  .card p  { font-size: .875rem; margin-bottom: .75rem; }
+  .tag-list { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .5rem; }
+  .tag { font-size: .75rem; background: var(--surface2); border: 1px solid var(--border); color: var(--muted); padding: .15em .5em; border-radius: 4px; }
+
+  /* Flow diagram */
+  .flow { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
+  .flow h3 { color: var(--accent2); margin-bottom: .75rem; }
+  .flow-steps { display: flex; flex-direction: column; gap: .25rem; }
+  .step {
+    display: flex;
+    align-items: flex-start;
+    gap: .75rem;
+    font-size: .875rem;
+  }
+  .step-num {
+    flex-shrink: 0;
+    width: 1.4rem;
+    height: 1.4rem;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .7rem;
+    font-weight: 700;
+    margin-top: .1rem;
+  }
+  .step-arrow { color: var(--border); margin-top: .1rem; font-size: .8rem; }
+  .step-content { color: var(--text); }
+  .step-content .dim { color: var(--muted); }
+
+  /* Tool table */
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; margin-bottom: 1.5rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
+  td { padding: .6rem .75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+  .tool-name { color: var(--green); font-weight: 600; font-family: monospace; }
+  .tool-args { color: var(--code); }
+
+  /* Env vars */
+  .env-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .75rem; margin-bottom: 1.5rem; }
+  .env-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1rem; }
+  .env-name { font-family: monospace; font-size: .85rem; color: var(--green); font-weight: 600; margin-bottom: .2rem; }
+  .env-default { font-family: monospace; font-size: .75rem; color: var(--muted); }
+  .env-desc { font-size: .8rem; color: var(--muted); margin-top: .3rem; }
+  .required-tag { font-size: .65rem; background: #ef535033; color: var(--red); padding: .1em .4em; border-radius: 3px; margin-left: .4rem; font-weight: 700; }
+
+  /* Architecture diagram */
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem; overflow-x: auto; }
+  pre.arch { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: .78rem; color: var(--text); line-height: 1.5; white-space: pre; }
+  .layer { margin-bottom: 1.5rem; }
+  .layer-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; margin-bottom: .5rem; }
+  .layer-boxes { display: flex; gap: .75rem; flex-wrap: wrap; }
+  .box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .6rem 1rem;
+    font-size: .85rem;
+    font-weight: 600;
+  }
+  .box-accent  { border-color: var(--accent); color: var(--accent); }
+  .box-blue    { border-color: var(--accent2); color: var(--accent2); }
+  .box-orange  { border-color: var(--orange); color: var(--orange); }
+  .box-green   { border-color: var(--green); color: var(--green); }
+  .box-purple  { border-color: #ce93d8; color: #ce93d8; }
+  .box-red     { border-color: var(--red); color: var(--red); }
+  .connector { color: var(--border); text-align: center; font-size: 1.2rem; padding: .2rem 0; width: 100%; }
+
+  /* Security */
+  .security-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+  .security-list li { display: flex; gap: .75rem; align-items: flex-start; font-size: .875rem; }
+  .security-list li::before { content: '🔒'; flex-shrink: 0; }
+
+  /* Footer */
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .8rem; }
+</style>
+</head>
+<body>
+
+<h1>Sovereign-Link</h1>
+<p class="subtitle">Private Telegram bot · Local LLM via Ollama · Vault I/O · Semantic Search · Tool Orchestration</p>
+
+<h2>Architecture Overview</h2>
+
+<div class="diagram">
+  <div class="layer">
+    <div class="layer-label">Interface</div>
+    <div class="layer-boxes">
+      <div class="box box-blue">Telegram API</div>
+    </div>
+  </div>
+  <div class="connector">↕</div>
+  <div class="layer">
+    <div class="layer-label">Handler Layer</div>
+    <div class="layer-boxes">
+      <div class="box box-accent">bot.py</div>
+    </div>
+  </div>
+  <div class="connector">↕</div>
+  <div class="layer">
+    <div class="layer-label">Orchestration</div>
+    <div class="layer-boxes">
+      <div class="box box-orange">llm.py</div>
+      <div class="box box-green">context.py</div>
+    </div>
+  </div>
+  <div class="connector">↕</div>
+  <div class="layer">
+    <div class="layer-label">Operations</div>
+    <div class="layer-boxes">
+      <div class="box box-purple">tools.py</div>
+      <div class="box box-red">vector.py</div>
+    </div>
+  </div>
+  <div class="connector">↕</div>
+  <div class="layer">
+    <div class="layer-label">External / Local Services</div>
+    <div class="layer-boxes">
+      <div class="box">Ollama LLM</div>
+      <div class="box">Ollama Embeddings</div>
+      <div class="box">ChromaDB</div>
+      <div class="box">Vault (git repo)</div>
+    </div>
+  </div>
+</div>
+
+<h2>Files</h2>
+<div class="file-grid">
+
+  <div class="card">
+    <div class="card-header">
+      <code class="filename">main.py</code>
+      <span class="badge badge-entry">Entry Point</span>
+    </div>
+    <p>Loads <code>.env</code>, initialises the bot via <code>build_app()</code>, starts Telegram long-polling.</p>
+    <div class="tag-list">
+      <span class="tag">load_dotenv</span>
+      <span class="tag">run_polling</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <code class="filename">bot.py</code>
+      <span class="badge badge-telegram">Telegram</span>
+    </div>
+    <p>All Telegram handlers. Every handler checks <code>_is_authorized()</code>. Long-running calls go through <code>asyncio.to_thread()</code> with a typing indicator.</p>
+    <div class="tag-list">
+      <span class="tag">/start</span>
+      <span class="tag">/clear</span>
+      <span class="tag">/vault</span>
+      <span class="tag">/whisper</span>
+      <span class="tag">handle_photo</span>
+      <span class="tag">handle_message</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <code class="filename">llm.py</code>
+      <span class="badge badge-llm">Orchestration</span>
+    </div>
+    <p>Ollama API client. Runs a tool call loop (max 5 iterations). Three conversation modes: text, vision, one-shot (vault summary / tweet).</p>
+    <div class="tag-list">
+      <span class="tag">run()</span>
+      <span class="tag">run_with_image()</span>
+      <span class="tag">summarize_to_vault()</span>
+      <span class="tag">whisper_tweet()</span>
+      <span class="tag">tool loop</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <code class="filename">context.py</code>
+      <span class="badge badge-state">State</span>
+    </div>
+    <p>In-memory conversation history. <code>deque(maxlen=20)</code> — oldest message dropped when full. Stores user, assistant, tool_calls, and tool result messages.</p>
+    <div class="tag-list">
+      <span class="tag">deque maxlen=20</span>
+      <span class="tag">get_history()</span>
+      <span class="tag">clear()</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <code class="filename">vector.py</code>
+      <span class="badge badge-vector">Search</span>
+    </div>
+    <p>ChromaDB persistent client + Ollama embedding client. Chunks vault content (1500 chars / 150 overlap), indexes via embeddings, supports semantic search and random chunk retrieval.</p>
+    <div class="tag-list">
+      <span class="tag">index_file()</span>
+      <span class="tag">search_vault_semantic()</span>
+      <span class="tag">random_chunk()</span>
+      <span class="tag">ChromaDB</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <code class="filename">tools.py</code>
+      <span class="badge badge-tools">Tools</span>
+    </div>
+    <p>Vault file I/O, git sync, website analysis. Exports <code>TOOL_DEFINITIONS</code> (OpenAI schema) and <code>TOOL_HANDLERS</code> (name → callable) consumed by <code>llm.py</code>.</p>
+    <div class="tag-list">
+      <span class="tag">read_vault</span>
+      <span class="tag">write_vault</span>
+      <span class="tag">sync_vault</span>
+      <span class="tag">search_vault_semantic</span>
+      <span class="tag">analyze_website</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <code class="filename">ingest.py</code>
+      <span class="badge badge-script">Script</span>
+    </div>
+    <p>One-time bulk indexer. Scans <code>VAULT_PATH</code> recursively for <code>*.md</code> files and calls <code>vector.index_file()</code> for each. Run once at setup or after bulk vault changes.</p>
+    <div class="tag-list">
+      <span class="tag">python ingest.py</span>
+      <span class="tag">bulk index</span>
+    </div>
+  </div>
+
+</div>
+
+<h2>Data Flows</h2>
+
+<div class="flow">
+  <h3>Text Message</h3>
+  <div class="flow-steps">
+    <div class="step"><div class="step-num">1</div><div class="step-content">Telegram TEXT → <code>bot.handle_message()</code></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-content"><code>llm.run(user_text)</code> — adds to context, builds <code>[system + history]</code></div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-content">POST <code>/v1/chat/completions</code> with <code>TOOL_DEFINITIONS</code></div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-content">If <code>tool_calls</code>: execute via <code>TOOL_HANDLERS</code>, store result, loop (max 5×)</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-content">On <code>stop</code>: store assistant reply in context → Telegram reply</div></div>
+  </div>
+</div>
+
+<div class="flow">
+  <h3>Photo Message (with optional caption)</h3>
+  <div class="flow-steps">
+    <div class="step"><div class="step-num">1</div><div class="step-content">Telegram PHOTO → <code>bot.handle_photo()</code></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-content">Select largest photo size (<code>photo[-1]</code>), <code>get_file()</code> + <code>download_as_bytearray()</code></div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-content"><code>base64.b64encode(bytes)</code> → <code>image_b64</code>. Caption or <code>"What is in this image?"</code></div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-content"><code>llm.run_with_image(caption, image_b64)</code> — filters tool/tool_calls from history (Ollama vision limitation)</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-content">Builds <code>[image_url content block + text]</code>, runs same tool loop as text flow</div></div>
+    <div class="step"><div class="step-num">6</div><div class="step-content">Edits "Processing image…" message with LLM reply</div></div>
+  </div>
+</div>
+
+<div class="flow">
+  <h3>/vault Command</h3>
+  <div class="flow-steps">
+    <div class="step"><div class="step-num">1</div><div class="step-content"><code>bot.cmd_vault()</code> → <code>context.get_history()[-10:]</code></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-content"><code>llm.summarize_to_vault(recent)</code> → returns <code>{titel, samenvatting}</code> JSON</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-content">Generate filename: <code>YYYY-MM-DD_HH-MM_{titel}.md</code></div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-content"><code>tools.write_vault(filename, markdown)</code> → writes file + auto-indexes in ChromaDB</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-content"><code>tools.sync_vault()</code> → <code>git add . && git commit && git push</code></div></div>
+  </div>
+</div>
+
+<div class="flow">
+  <h3>/whisper Command</h3>
+  <div class="flow-steps">
+    <div class="step"><div class="step-num">1</div><div class="step-content"><code>vector.random_chunk()</code> — random offset into ChromaDB collection</div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-content"><code>llm.whisper_tweet(chunk)</code> — one-shot call, no tools, no history</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-content">English tweet ≤200 chars with 2–3 hashtags → Telegram reply</div></div>
+  </div>
+</div>
+
+<div class="flow">
+  <h3>Vault Write → ChromaDB Index</h3>
+  <div class="flow-steps">
+    <div class="step"><div class="step-num">1</div><div class="step-content"><code>tools.write_vault(file_name, content)</code></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-content">Path traversal check → <code>os.makedirs</code> → write file</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-content"><code>vector.index_file(file_name, content)</code></div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-content">Delete old chunks for file from ChromaDB</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-content">Chunk content (1500 chars / 150 overlap) → embed each via Ollama → store in ChromaDB</div></div>
+  </div>
+</div>
+
+<h2>Tools Available to LLM</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Tool</th>
+      <th>Arguments</th>
+      <th>Returns</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="tool-name">read_vault</td>
+      <td class="tool-args">file_name: str</td>
+      <td>File contents or error</td>
+      <td>Path traversal protected</td>
+    </tr>
+    <tr>
+      <td class="tool-name">write_vault</td>
+      <td class="tool-args">file_name: str, content: str</td>
+      <td>Success or error</td>
+      <td>Auto-creates dirs. Triggers ChromaDB indexing.</td>
+    </tr>
+    <tr>
+      <td class="tool-name">sync_vault</td>
+      <td class="tool-args">(none)</td>
+      <td>Git output or error</td>
+      <td><code>git add . && commit && push</code>. 30s timeout.</td>
+    </tr>
+    <tr>
+      <td class="tool-name">search_vault_semantic</td>
+      <td class="tool-args">query: str</td>
+      <td>Top 5 chunks with file names</td>
+      <td>Embeds query via Ollama, queries ChromaDB</td>
+    </tr>
+    <tr>
+      <td class="tool-name">analyze_website</td>
+      <td class="tool-args">url: str</td>
+      <td>Extracted Markdown ≤8000 chars or error</td>
+      <td>httpx + trafilatura. Rotating UA. HTTP/HTTPS only.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Environment Variables</h2>
+<div class="env-grid">
+  <div class="env-card">
+    <div class="env-name">TELEGRAM_BOT_TOKEN <span class="required-tag">required</span></div>
+    <div class="env-desc">Telegram bot authentication token</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">ALLOWED_USER_ID <span class="required-tag">required</span></div>
+    <div class="env-desc">Single authorized Telegram user ID (int)</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">OLLAMA_BASE_URL</div>
+    <div class="env-default">default: https://ollama.com</div>
+    <div class="env-desc">Ollama LLM API endpoint for chat completions</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">OLLAMA_API_KEY</div>
+    <div class="env-default">default: ""</div>
+    <div class="env-desc">Bearer token for Ollama (optional)</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">OLLAMA_MODEL</div>
+    <div class="env-default">default: llama3.1</div>
+    <div class="env-desc">Model name for chat completions</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">SYSTEM_PROMPT</div>
+    <div class="env-default">default: built-in vault assistant prompt</div>
+    <div class="env-desc">Custom LLM system instruction. Includes analyze_website and vault usage guidance.</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">EMBED_BASE_URL</div>
+    <div class="env-default">default: http://localhost:11434</div>
+    <div class="env-desc">Ollama endpoint for embeddings (separate from LLM endpoint)</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">EMBED_MODEL</div>
+    <div class="env-default">default: nomic-embed-text</div>
+    <div class="env-desc">Embedding model for ChromaDB indexing and search</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">CHROMA_PATH</div>
+    <div class="env-default">default: ~/.sovereign-link/chroma</div>
+    <div class="env-desc">ChromaDB persistent storage directory</div>
+  </div>
+  <div class="env-card">
+    <div class="env-name">VAULT_PATH</div>
+    <div class="env-default">default: /home/wouter/Documents/fractalisme-vault</div>
+    <div class="env-desc">Local markdown vault directory (must be a git repo for sync to work)</div>
+  </div>
+</div>
+
+<h2>Security</h2>
+<ul class="security-list">
+  <li>Every Telegram handler checks <code>ALLOWED_USER_ID</code> before processing — all other users silently ignored.</li>
+  <li>Vault file access uses <code>os.path.realpath</code> comparison to prevent path traversal attacks.</li>
+  <li><code>analyze_website</code> validates URL scheme — only <code>http://</code> and <code>https://</code> allowed (SSRF protection).</li>
+  <li>Tool call loop capped at 5 iterations to prevent infinite loops.</li>
+  <li>Vision requests (<code>run_with_image</code>) strip <code>tool_calls</code> and <code>tool</code> messages from history to avoid Ollama multimodal compatibility issues.</li>
+</ul>
+
+<footer>Generated 2026-07-22 · sovereign-link · <code>architecture.json</code> for agent consumption</footer>
+
+</body>
+</html>

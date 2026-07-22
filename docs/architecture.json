@@ -1,0 +1,249 @@
+{
+  "project": "sovereign-link",
+  "description": "Private single-user Telegram bot with local LLM (Ollama), vault I/O, semantic search via ChromaDB, and tool-calling loop. All data stays on local infrastructure.",
+  "entry_point": "main.py",
+  "files": {
+    "main.py": {
+      "role": "bootstrap",
+      "description": "Loads .env, calls bot.build_app(), starts Telegram polling loop.",
+      "imports": ["bot"],
+      "exports": [],
+      "env_vars": []
+    },
+    "bot.py": {
+      "role": "telegram_interface",
+      "description": "All Telegram command and message handlers. Single authorized user gate. Bridges async Telegram events to synchronous LLM calls via asyncio.to_thread().",
+      "imports": ["context", "llm", "vector", "tools"],
+      "exports": ["build_app"],
+      "env_vars": ["TELEGRAM_BOT_TOKEN", "ALLOWED_USER_ID"],
+      "handlers": {
+        "cmd_start": "/start — replies with online status",
+        "cmd_clear": "/clear — resets context.clear()",
+        "cmd_vault": "/vault — summarizes last 10 history messages, writes markdown note to vault, syncs git",
+        "cmd_whisper": "/whisper — picks random vault chunk, generates English tweet via LLM",
+        "handle_photo": "PHOTO messages — downloads largest photo size as bytearray, base64-encodes, calls llm.run_with_image(caption, image_b64)",
+        "handle_message": "TEXT messages — calls llm.run(user_text)"
+      },
+      "patterns": [
+        "Authorization check _is_authorized() on every handler",
+        "keep_typing() coroutine sends chat action every 4s during LLM wait",
+        "Photo response edits the 'Processing image...' status message in-place"
+      ]
+    },
+    "llm.py": {
+      "role": "llm_orchestration",
+      "description": "Ollama API client. Three entry points: run() for text, run_with_image() for vision, summarize_to_vault() for structured JSON output, whisper_tweet() for tweet generation. run() and run_with_image() both execute the tool call loop.",
+      "imports": ["context", "tools"],
+      "exports": ["run", "run_with_image", "summarize_to_vault", "whisper_tweet"],
+      "env_vars": ["OLLAMA_BASE_URL", "OLLAMA_API_KEY", "OLLAMA_MODEL", "SYSTEM_PROMPT"],
+      "functions": {
+        "_chat": "POST /v1/chat/completions with TOOL_DEFINITIONS; returns raw API response dict",
+        "run": "Main text loop. Adds user message to context, builds messages [system + history], calls _chat(), handles tool_calls up to 5 iterations.",
+        "run_with_image": "Vision loop. Filters tool/tool_calls messages from history (Ollama limitation), prepends image_url content block, then runs same tool call loop as run().",
+        "summarize_to_vault": "One-shot LLM call without tools. Returns parsed {titel, samenvatting} JSON dict.",
+        "whisper_tweet": "One-shot LLM call without tools. Returns tweet string."
+      },
+      "tool_call_loop": {
+        "max_iterations": 5,
+        "flow": [
+          "call _chat(messages)",
+          "if finish_reason == tool_calls: execute each tool via TOOL_HANDLERS, store results in context, append to messages, continue",
+          "if finish_reason == stop: store assistant text in context, return"
+        ]
+      }
+    },
+    "context.py": {
+      "role": "session_state",
+      "description": "In-memory conversation history using a deque with maxlen=20. Stores user, assistant, tool_calls, and tool result messages. Oldest message discarded when full.",
+      "imports": [],
+      "exports": ["add_message", "add_tool_result", "add_assistant_with_tool_calls", "get_history", "clear"],
+      "env_vars": [],
+      "storage": {
+        "type": "collections.deque",
+        "maxlen": 20,
+        "message_formats": {
+          "user": "{role: 'user', content: str}",
+          "assistant_text": "{role: 'assistant', content: str}",
+          "assistant_tool_calls": "{role: 'assistant', tool_calls: list}",
+          "tool_result": "{role: 'tool', tool_call_id: str, content: str}"
+        }
+      }
+    },
+    "vector.py": {
+      "role": "embeddings_and_search",
+      "description": "ChromaDB persistent vector store for vault content. Ollama embedding client. Handles chunking, indexing, semantic search, and random chunk retrieval.",
+      "imports": [],
+      "exports": ["index_file", "random_chunk", "search_vault_semantic", "VAULT_PATH"],
+      "env_vars": ["EMBED_BASE_URL", "EMBED_MODEL", "CHROMA_PATH", "VAULT_PATH"],
+      "constants": {
+        "CHUNK_SIZE": 1500,
+        "CHUNK_OVERLAP": 150,
+        "collection_name": "vault"
+      },
+      "functions": {
+        "_embed": "POST to Ollama /api/embeddings; returns vector list",
+        "_chunk": "Sliding window chunker. Returns list of {id: 'file::N', text, metadata: {file_name, chunk}}",
+        "index_file": "Delete existing chunks for file, rechunk content, embed each chunk, add to ChromaDB",
+        "random_chunk": "Get total count, pick random offset, return single document string or None",
+        "search_vault_semantic": "Embed query, query collection n_results=5, format as '[file_name]\n{doc}' joined by '---'"
+      }
+    },
+    "tools.py": {
+      "role": "vault_operations_and_tool_registry",
+      "description": "Vault file I/O, git sync, website analysis. Defines TOOL_DEFINITIONS (OpenAI-format schemas) and TOOL_HANDLERS (name → callable). Imported by llm.py.",
+      "imports": ["vector"],
+      "exports": ["TOOL_DEFINITIONS", "TOOL_HANDLERS", "write_vault", "sync_vault"],
+      "env_vars": ["VAULT_PATH"],
+      "tools": {
+        "read_vault": {
+          "args": ["file_name: str"],
+          "returns": "file content string or error string",
+          "security": "path traversal check via os.path.realpath"
+        },
+        "write_vault": {
+          "args": ["file_name: str", "content: str"],
+          "returns": "success or error string",
+          "side_effects": ["os.makedirs for subdirs", "vector.index_file() to update ChromaDB"],
+          "security": "path traversal check"
+        },
+        "sync_vault": {
+          "args": [],
+          "returns": "git output string or error",
+          "command": "git add . && git commit -m 'Sovereign-Link Update' && git push",
+          "timeout": "30s"
+        },
+        "search_vault_semantic": {
+          "args": ["query: str"],
+          "returns": "top 5 formatted chunks with file metadata",
+          "delegates_to": "vector.search_vault_semantic"
+        },
+        "analyze_website": {
+          "args": ["url: str"],
+          "returns": "extracted markdown content (max 8000 chars) or error string",
+          "security": "only http/https allowed (SSRF protection)",
+          "error_handling": ["403 Forbidden", "429 Rate Limited", "timeout 20s"],
+          "libraries": ["httpx (with rotating User-Agent)", "trafilatura"]
+        }
+      }
+    },
+    "ingest.py": {
+      "role": "setup_script",
+      "description": "One-time bulk indexing. Scans VAULT_PATH recursively for *.md files, calls vector.index_file() for each. Run once at setup or after bulk vault changes.",
+      "imports": ["vector"],
+      "exports": [],
+      "env_vars": ["VAULT_PATH"],
+      "usage": "python ingest.py"
+    }
+  },
+  "environment_variables": {
+    "TELEGRAM_BOT_TOKEN": {"required": true, "used_in": "bot.py", "description": "Telegram bot authentication token"},
+    "ALLOWED_USER_ID": {"required": true, "used_in": "bot.py", "description": "Single authorized Telegram user ID (int)"},
+    "OLLAMA_BASE_URL": {"required": false, "default": "https://ollama.com", "used_in": "llm.py", "description": "Ollama LLM API endpoint"},
+    "OLLAMA_API_KEY": {"required": false, "default": "", "used_in": "llm.py", "description": "Bearer token for Ollama (optional)"},
+    "OLLAMA_MODEL": {"required": false, "default": "llama3.1", "used_in": "llm.py", "description": "Model name for chat completions"},
+    "SYSTEM_PROMPT": {"required": false, "used_in": "llm.py", "description": "Custom LLM system instruction. Default instructs vault assistant behavior + analyze_website usage."},
+    "EMBED_BASE_URL": {"required": false, "default": "http://localhost:11434", "used_in": "vector.py", "description": "Ollama endpoint for embeddings"},
+    "EMBED_MODEL": {"required": false, "default": "nomic-embed-text", "used_in": "vector.py", "description": "Embedding model name"},
+    "CHROMA_PATH": {"required": false, "default": "~/.sovereign-link/chroma", "used_in": "vector.py", "description": "ChromaDB persistent storage directory"},
+    "VAULT_PATH": {"required": false, "default": "/home/wouter/Documents/fractalisme-vault", "used_in": ["tools.py", "vector.py", "ingest.py"], "description": "Local markdown vault directory (git repo)"}
+  },
+  "data_flows": {
+    "text_message": [
+      "Telegram → bot.handle_message()",
+      "→ llm.run(user_text)",
+      "→ context.add_message('user', text)",
+      "→ _chat([system + history + tools])",
+      "→ [tool call loop if needed]",
+      "→ context.add_message('assistant', reply)",
+      "→ Telegram reply"
+    ],
+    "photo_message": [
+      "Telegram → bot.handle_photo()",
+      "→ ctx.bot.get_file() + download_as_bytearray()",
+      "→ base64.b64encode(bytes)",
+      "→ llm.run_with_image(caption, image_b64)",
+      "→ filter tool/tool_calls from history",
+      "→ build multimodal content block [image_url + text]",
+      "→ _chat([system + safe_history + multimodal_user])",
+      "→ [tool call loop if needed]",
+      "→ edit 'Processing image...' message with reply"
+    ],
+    "vault_command": [
+      "Telegram /vault → bot.cmd_vault()",
+      "→ context.get_history()[-10:]",
+      "→ llm.summarize_to_vault(recent)",
+      "→ returns {titel, samenvatting}",
+      "→ tools.write_vault(filename, markdown)",
+      "→ vector.index_file() [auto-triggered]",
+      "→ tools.sync_vault() [git commit + push]",
+      "→ Telegram reply with filename"
+    ],
+    "whisper_command": [
+      "Telegram /whisper → bot.cmd_whisper()",
+      "→ vector.random_chunk()",
+      "→ llm.whisper_tweet(chunk)",
+      "→ Telegram reply with tweet"
+    ],
+    "tool_call_cycle": [
+      "LLM returns finish_reason='tool_calls'",
+      "→ parse each tool_call: {name, arguments}",
+      "→ TOOL_HANDLERS[name](args)",
+      "→ context.add_tool_result(id, result)",
+      "→ append to messages as role='tool'",
+      "→ loop back to _chat() (max 5 times)",
+      "→ on 'stop': return final text"
+    ],
+    "vault_write_with_indexing": [
+      "tools.write_vault(file_name, content)",
+      "→ path traversal check",
+      "→ os.makedirs + file write",
+      "→ vector.index_file(file_name, content)",
+      "  → delete old chunks from ChromaDB",
+      "  → _chunk(content) → list of {id, text, metadata}",
+      "  → _embed(chunk.text) for each → POST /api/embeddings",
+      "  → _collection.add(ids, embeddings, documents, metadatas)"
+    ]
+  },
+  "external_dependencies": {
+    "ollama_llm": {
+      "endpoint": "OLLAMA_BASE_URL/v1/chat/completions",
+      "method": "POST",
+      "auth": "Bearer OLLAMA_API_KEY (optional)",
+      "used_by": "llm._chat()"
+    },
+    "ollama_embeddings": {
+      "endpoint": "EMBED_BASE_URL/api/embeddings",
+      "method": "POST",
+      "used_by": "vector._embed()"
+    },
+    "telegram_api": {
+      "used_by": "bot.py via python-telegram-bot",
+      "auth": "TELEGRAM_BOT_TOKEN"
+    },
+    "chromadb": {
+      "type": "local persistent",
+      "path": "CHROMA_PATH",
+      "collection": "vault",
+      "used_by": "vector.py"
+    },
+    "vault_git_repo": {
+      "type": "local git repository",
+      "path": "VAULT_PATH",
+      "used_by": "tools.sync_vault()"
+    }
+  },
+  "security": {
+    "authorization": "ALLOWED_USER_ID check on every Telegram handler",
+    "path_traversal": "os.path.realpath check before any vault file access",
+    "ssrf_protection": "analyze_website() only allows http/https schemes",
+    "tool_loop_limit": "Max 5 iterations in tool call loop to prevent infinite loops",
+    "vision_history_filter": "Tool/tool_calls messages stripped from history before vision requests"
+  },
+  "python_packages": {
+    "python-telegram-bot": "21.6",
+    "httpx": "0.27.2",
+    "python-dotenv": "1.0.1",
+    "chromadb": "latest",
+    "trafilatura": "latest"
+  }
+}
