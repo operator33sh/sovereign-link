@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from collections import deque
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -35,23 +36,34 @@ def _load() -> None:
         logger.exception("Failed to load conversation history")
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def add_message(role: str, content: str) -> None:
-    _history.append({"role": role, "content": content})
+    _history.append({"role": role, "content": content, "timestamp": _now()})
     _save()
 
 
 def add_tool_result(tool_call_id: str, content: str) -> None:
-    _history.append({"role": "tool", "tool_call_id": tool_call_id, "content": content})
+    _history.append({"role": "tool", "tool_call_id": tool_call_id, "content": content, "timestamp": _now()})
     _save()
 
 
 def add_assistant_with_tool_calls(tool_calls: list) -> None:
-    _history.append({"role": "assistant", "tool_calls": tool_calls})
+    _history.append({"role": "assistant", "tool_calls": tool_calls, "timestamp": _now()})
     _save()
 
 
 def get_history() -> list:
-    return list(_history)
+    result = []
+    for msg in _history:
+        entry = {k: v for k, v in msg.items() if k != "timestamp"}
+        ts = msg.get("timestamp")
+        if ts and isinstance(entry.get("content"), str):
+            entry["content"] = f"{entry['content']}\n[{ts}]"
+        result.append(entry)
+    return result
 
 
 def clear() -> None:
