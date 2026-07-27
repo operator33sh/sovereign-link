@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 from datetime import datetime
 
 from telegram import Update, BotCommand
@@ -20,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
+
+
+def _strip_timestamps(text: str) -> str:
+    return re.sub(r"\n\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]", "", text)
 
 
 def _is_authorized(update: Update) -> bool:
@@ -157,7 +162,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     finally:
         typing_task.cancel()
 
-    await status.edit_text(reply)
+    await status.edit_text(_strip_timestamps(reply))
 
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -184,7 +189,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     finally:
         typing_task.cancel()
 
-    await update.message.reply_text(reply)
+    await update.message.reply_text(_strip_timestamps(reply))
 
 
 async def _set_commands(app: Application) -> None:
