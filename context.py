@@ -59,6 +59,9 @@ def get_history() -> list:
     result = []
     for msg in _history:
         entry = {k: v for k, v in msg.items() if k != "timestamp"}
+        ts = msg.get("timestamp")
+        if ts and isinstance(entry.get("content"), str):
+            entry["content"] = f"{entry['content']}\n[{ts}]"
         result.append(entry)
     return result
 
