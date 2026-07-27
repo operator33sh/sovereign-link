@@ -24,7 +24,7 @@ ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 
 
 def _strip_timestamps(text: str) -> str:
-    return re.sub(r"\n\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]", "", text)
+    return re.sub(r"\n\[[^\]]{10,}\]", "", text)
 
 
 def _is_authorized(update: Update) -> bool:
