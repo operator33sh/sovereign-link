@@ -77,11 +77,31 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     titel = result.get("titel", "aantekening").strip().replace(" ", "-")
     samenvatting = result.get("samenvatting", "")
+    raw_tags = result.get("tags", [])
+    tags_str = " ".join(
+        t if t.startswith("#") else f"#{t}"
+        for t in raw_tags
+        if isinstance(t, str) and t.strip()
+    )
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%H-%M")
     file_name = f"{date_str}_{time_str}_{titel}.md"
 
-    note = f"## {timestamp.strftime('%Y-%m-%d %H:%M')} — {titel.replace('-', ' ')}\n\n{samenvatting}\n"
+    # Find related notes for [[wikilinks]] in graph view
+    related_files = await asyncio.to_thread(vector.search_vault_files, samenvatting, 5)
+    related_links = [
+        f"[[{f[:-3] if f.endswith('.md') else f}]]"
+        for f in related_files
+        if f != file_name
+    ]
+    links_str = "  ".join(related_links)
+
+    note = (
+        f"## {timestamp.strftime('%Y-%m-%d %H:%M')} — {titel.replace('-', ' ')}\n\n"
+        f"{samenvatting}\n"
+        + (f"\n### Zie ook\n{links_str}\n" if links_str else "")
+        + (f"\n{tags_str}\n" if tags_str else "")
+    )
 
     write_result = write_vault(file_name, note)
     sync_result = sync_vault()

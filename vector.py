@@ -72,6 +72,29 @@ def random_chunk() -> str | None:
     return docs[0] if docs else None
 
 
+def search_vault_files(query: str, n_results: int = 5) -> list[str]:
+    """Return unique file names of the most semantically related vault notes."""
+    total = _collection.count()
+    if total == 0:
+        return []
+
+    query_embedding = _embed(query)
+    results = _collection.query(
+        query_embeddings=[query_embedding],
+        n_results=min(n_results, total),
+        include=["metadatas"],
+    )
+
+    seen = set()
+    files = []
+    for meta in results["metadatas"][0]:
+        name = meta["file_name"]
+        if name not in seen:
+            seen.add(name)
+            files.append(name)
+    return files
+
+
 def search_vault_semantic(query: str, n_results: int = 5) -> str:
     total = _collection.count()
     if total == 0:

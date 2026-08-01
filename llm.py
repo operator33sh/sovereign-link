@@ -46,10 +46,12 @@ def summarize_to_vault(recent_messages: list) -> dict:
         if m.get("content")
     )
     prompt = (
-        "Analyseer het volgende gesprek en geef je antwoord als JSON met exact twee velden:\n"
+        "Analyseer het volgende gesprek en geef je antwoord als JSON met exact drie velden:\n"
         '- "titel": een korte Nederlandse titel (3-6 woorden, geen leestekens behalve koppeltekens)\n'
         '- "samenvatting": een beknopte samenvatting in gestructureerd Nederlandstalig markdown van de '
-        "belangrijkste inzichten, besluiten en informatie. Geen begroetingen of meta-commentaar.\n\n"
+        "belangrijkste inzichten, besluiten en informatie. Geen begroetingen of meta-commentaar.\n"
+        '- "tags": een lijst van 3-6 relevante Nederlandstalige of Engelse trefwoorden als Obsidian hashtags '
+        '(bijv. ["#filosofie", "#AI", "#strategie"]). Kies tags die de inhoud goed categoriseren.\n\n'
         f"Gesprek:\n{conversation}\n\n"
         "Geef alleen de JSON terug, niets anders."
     )
