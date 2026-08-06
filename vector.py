@@ -72,46 +72,78 @@ def random_chunk() -> str | None:
     return docs[0] if docs else None
 
 
-def search_vault_files(query: str, n_results: int = 5) -> list[str]:
-    """Return unique file names of the most semantically related vault notes."""
+def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None = None) -> list[str]:
+    """Return unique file names of the most semantically related vault notes.
+
+    Args:
+        path_prefix: If set, restrict results to files whose name starts with this prefix
+                     (e.g. "memory/" to search only sovereign memory logs).
+    """
     total = _collection.count()
     if total == 0:
         return []
 
     query_embedding = _embed(query)
-    results = _collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(n_results, total),
-        include=["metadatas"],
-    )
+    kwargs: dict = {
+        "query_embeddings": [query_embedding],
+        "n_results": min(n_results, total),
+        "include": ["metadatas"],
+    }
+    if path_prefix:
+        try:
+            kwargs["where"] = {"file_name": {"$contains": path_prefix}}
+        except Exception:
+            pass  # will post-filter below if ChromaDB rejects the operator
 
-    seen = set()
-    files = []
+    results = _collection.query(**kwargs)
+
+    seen: set = set()
+    files: list = []
     for meta in results["metadatas"][0]:
         name = meta["file_name"]
+        if path_prefix and not name.startswith(path_prefix):
+            continue  # post-filter fallback for older ChromaDB versions
         if name not in seen:
             seen.add(name)
             files.append(name)
     return files
 
 
-def search_vault_semantic(query: str, n_results: int = 5) -> str:
+def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | None = None) -> str:
+    """Semantic search returning formatted text chunks.
+
+    Args:
+        path_prefix: If set, restrict results to files whose name starts with this prefix
+                     (e.g. "memory/" to search only sovereign memory logs).
+    """
     total = _collection.count()
     if total == 0:
         return "Vector index is leeg. Voer eerst ingest.py uit."
 
     query_embedding = _embed(query)
-    results = _collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(n_results, total),
-        include=["documents", "metadatas"],
-    )
+    kwargs: dict = {
+        "query_embeddings": [query_embedding],
+        "n_results": min(n_results, total),
+        "include": ["documents", "metadatas"],
+    }
+    if path_prefix:
+        try:
+            kwargs["where"] = {"file_name": {"$contains": path_prefix}}
+        except Exception:
+            pass  # will post-filter below
+
+    results = _collection.query(**kwargs)
 
     if not results["documents"][0]:
         return "Geen relevante fragmenten gevonden."
 
     parts = []
     for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+        if path_prefix and not meta["file_name"].startswith(path_prefix):
+            continue  # post-filter fallback
         parts.append(f"[{meta['file_name']}]\n{doc}")
+
+    if not parts:
+        return "Geen relevante fragmenten gevonden."
 
     return "\n\n---\n\n".join(parts)

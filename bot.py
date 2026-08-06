@@ -12,6 +12,7 @@ import context
 import llm
 import vector
 from tools import write_vault, sync_vault
+from memory_manager import run_memory_pipeline
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -40,8 +41,41 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
-    context.clear()
-    await update.message.reply_text("Context cleared.")
+
+    recent = context.get_history()
+    if recent:
+        transcript = "\n".join(
+            f"{m['role'].upper()}: {m.get('content', '')}"
+            for m in recent
+            if m.get("content") and isinstance(m["content"], str)
+        )
+
+        async def keep_typing():
+            while True:
+                try:
+                    await update.message.chat.send_action("typing")
+                except Exception:
+                    pass
+                await asyncio.sleep(4)
+
+        typing_task = asyncio.create_task(keep_typing())
+        memory_note = None
+        try:
+            memory_result = await asyncio.to_thread(run_memory_pipeline, transcript)
+            memory_note = memory_result["file_name"]
+        except Exception:
+            logger.exception("Auto-memory on clear failed")
+        finally:
+            typing_task.cancel()
+
+        context.clear()
+        msg = "Context cleared."
+        if memory_note:
+            msg += f"\nSovereign Memory saved: `{memory_note}`"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    else:
+        context.clear()
+        await update.message.reply_text("Context cleared.")
 
 
 async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -108,6 +142,46 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.message.reply_text(
         f"Vault notitie opgeslagen als `{file_name}`.\n\n{write_result}\n{sync_result}",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_memory(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+
+    recent = context.get_history()[-20:]
+    if not recent:
+        await update.message.reply_text("No conversation history to process.")
+        return
+
+    transcript = "\n".join(
+        f"{m['role'].upper()}: {m.get('content', '')}"
+        for m in recent
+        if m.get("content") and isinstance(m["content"], str)
+    )
+
+    async def keep_typing():
+        while True:
+            try:
+                await update.message.chat.send_action("typing")
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    typing_task = asyncio.create_task(keep_typing())
+    try:
+        result = await asyncio.to_thread(run_memory_pipeline, transcript)
+    except Exception as e:
+        logger.exception("Memory pipeline error")
+        typing_task.cancel()
+        await update.message.reply_text(f"Memory pipeline failed: {e}")
+        return
+    finally:
+        typing_task.cancel()
+
+    await update.message.reply_text(
+        f"Memory log saved as `{result['file_name']}`.\n\n{result['write_result']}\n{result['sync_result']}",
         parse_mode="Markdown",
     )
 
@@ -185,9 +259,31 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await status.edit_text(_strip_timestamps(reply))
 
 
+async def _auto_memory_background(update: Update, transcript: str) -> None:
+    """Fire-and-forget background task: run memory pipeline and notify on completion."""
+    try:
+        result = await asyncio.to_thread(run_memory_pipeline, transcript)
+        await update.message.reply_text(
+            f"Sovereign Memory auto-saved: `{result['file_name']}`",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        logger.exception("Background auto-memory pipeline error")
+
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
+
+    # Auto-save memory when context is nearly full (18/20 messages)
+    history = context.get_history()
+    if len(history) >= 18:
+        transcript = "\n".join(
+            f"{m['role'].upper()}: {m.get('content', '')}"
+            for m in history
+            if m.get("content") and isinstance(m["content"], str)
+        )
+        asyncio.create_task(_auto_memory_background(update, transcript))
 
     user_text = update.message.text
     logger.info("Received message: %s", user_text[:80])
@@ -217,6 +313,7 @@ async def _set_commands(app: Application) -> None:
         BotCommand("start", "Check if the bot is online"),
         BotCommand("clear", "Clear the current session context"),
         BotCommand("vault", "Save last 5 exchanges as a vault note"),
+        BotCommand("memory", "Extract and save sovereign memory log from conversation"),
         BotCommand("whisper", "Generate a tweet from a random vault insight"),
     ])
 
@@ -226,6 +323,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("vault", cmd_vault))
+    app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("whisper", cmd_whisper))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

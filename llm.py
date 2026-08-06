@@ -71,6 +71,56 @@ def summarize_to_vault(recent_messages: list) -> dict:
         return {"titel": "aantekening", "samenvatting": raw}
 
 
+def extract_memory_insights(transcript: str) -> dict:
+    """Ask the LLM to extract High-Value Insights from a conversation transcript.
+
+    Returns a dict with keys:
+        - topic: snake_case slug (2-4 words) for the filename
+        - insights: list of dicts with keys timestamp, core_insight, emotional_state,
+                    tags, connected_nodes, open_questions
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    prompt = (
+        "Analyse the following conversation transcript and extract High-Value Insights (HVIs).\n"
+        "HVIs are: psychological breakthroughs, redefined values, recurring shadow patterns, "
+        "or technical/architectural decisions with long-term consequence.\n\n"
+        "Return JSON with exactly two fields:\n"
+        '- "topic": a 2-4 word slug using underscores, no spaces (e.g. "Shadow_Integration_Cycle")\n'
+        '- "insights": a list of objects, each with:\n'
+        '    - "timestamp": ISO date string (use today: ' + today + ')\n'
+        '    - "core_insight": one sentence summarising the breakthrough\n'
+        '    - "emotional_state": e.g. Vulnerable, Analytical, Transgressive, Integrative\n'
+        '    - "tags": list of Obsidian hashtags e.g. ["#shadowwork", "#Sovereign"]\n'
+        '    - "connected_nodes": list of wikilink strings e.g. ["[[Previous Log]]"] (empty list if none)\n'
+        '    - "open_questions": list of strings describing unresolved tensions (empty list if none)\n\n'
+        f"Conversation:\n{transcript}\n\n"
+        "Return only JSON, nothing else."
+    )
+    payload = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+    response = _client.post("/v1/chat/completions", json=payload)
+    response.raise_for_status()
+    raw = response.json()["choices"][0]["message"].get("content", "")
+    try:
+        clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        return {
+            "topic": "Unnamed_Insight",
+            "insights": [{
+                "timestamp": today,
+                "core_insight": raw[:500] if raw else "No insight extracted.",
+                "emotional_state": "Unknown",
+                "tags": ["#sovereign"],
+                "connected_nodes": [],
+                "open_questions": [],
+            }],
+        }
+
+
 def whisper_tweet(chunk: str) -> str:
     """Generate a ~200 character English tweet with hashtags based on a vault chunk."""
     prompt = (
@@ -146,10 +196,21 @@ def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jp
 
 
 def run(user_message: str) -> str:
+    is_first = not context.get_history()  # check before add_message
     context.add_message("user", user_message)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     system_with_time = f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
+
+    if is_first:
+        try:
+            from memory_manager import inject_memory_context
+            memory_block = inject_memory_context(user_message)
+            if memory_block:
+                system_with_time = f"{system_with_time}\n\n{memory_block}"
+        except Exception:
+            pass  # never let memory injection crash the main chat flow
+
     messages = [{"role": "system", "content": system_with_time}] + context.get_history()
 
     # Tool call loop — at most 5 iterations to prevent infinite loops
