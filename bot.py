@@ -260,13 +260,10 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _auto_memory_background(update: Update, transcript: str) -> None:
-    """Fire-and-forget background task: run memory pipeline and notify on completion."""
+    """Fire-and-forget background task: run memory pipeline silently."""
     try:
         result = await asyncio.to_thread(run_memory_pipeline, transcript)
-        await update.message.reply_text(
-            f"Sovereign Memory auto-saved: `{result['file_name']}`",
-            parse_mode="Markdown",
-        )
+        logger.info("Sovereign Memory auto-saved: %s", result['file_name'])
     except Exception:
         logger.exception("Background auto-memory pipeline error")
 
