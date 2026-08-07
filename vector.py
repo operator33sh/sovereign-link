@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import chromadb
@@ -19,7 +20,10 @@ CHUNK_OVERLAP = 150
 DISTANCE_THRESHOLD = 0.8  # cosine distance above this = not relevant
 
 _chroma = chromadb.PersistentClient(path=CHROMA_PATH)
-_collection = _chroma.get_or_create_collection("vault")
+_collection = _chroma.get_or_create_collection(
+    "vault_cosine",
+    metadata={"hnsw:space": "cosine"},
+)
 
 _embed_client = httpx.Client(timeout=60.0)
 
@@ -49,7 +53,10 @@ def _chunk(text: str, file_name: str) -> list:
     return chunks
 
 
-def index_file(file_name: str, content: str) -> None:
+def index_file(file_name: str, content: str, timestamp: str | None = None) -> None:
+    if timestamp is None:
+        timestamp = datetime.now().isoformat()
+
     existing = _collection.get(where={"file_name": file_name})
     if existing["ids"]:
         _collection.delete(ids=existing["ids"])
@@ -57,6 +64,9 @@ def index_file(file_name: str, content: str) -> None:
     chunks = _chunk(content, file_name)
     if not chunks:
         return
+
+    for chunk in chunks:
+        chunk["metadata"]["timestamp"] = timestamp
 
     embeddings = [_embed(c["text"]) for c in chunks]
     _collection.add(
@@ -148,7 +158,9 @@ def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | Non
             continue
         if dist > DISTANCE_THRESHOLD:
             continue  # suppress irrelevant results rather than hallucinate proximity
-        parts.append(f"[{meta['file_name']}]\n{doc}")
+        ts = meta.get("timestamp", "")
+        header = f"[{meta['file_name']} | {ts}]" if ts else f"[{meta['file_name']}]"
+        parts.append(f"{header}\n{doc}")
 
     if not parts:
         return "Geen relevante fragmenten gevonden."
@@ -165,23 +177,24 @@ _watcher_lock = threading.Lock()
 _debounce_delay = 2.0  # seconds to wait after last event before indexing
 
 
-def _index_path(path: Path) -> None:
+def _index_path(path: Path, event_type: str = "modified") -> None:
     """Index a single vault file by its absolute path."""
     vault = Path(VAULT_PATH)
     try:
         rel = str(path.relative_to(vault))
         content = path.read_text(encoding="utf-8")
         if content.strip():
-            index_file(rel, content)
-            logger.info("Watcher indexed: %s", rel)
+            mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+            index_file(rel, content, mtime)
+            logger.info("Vault %s → indexed: %s", event_type, rel)
     except Exception:
         logger.exception("Watcher failed to index %s", path)
 
 
-def _debounced_index(path: Path) -> None:
+def _debounced_index(path: Path, event_type: str = "modified") -> None:
     """Sleep briefly then index — absorbs rapid successive writes to the same file."""
     time.sleep(_debounce_delay)
-    _index_path(path)
+    _index_path(path, event_type)
 
 
 def start_vault_watcher() -> None:
@@ -192,25 +205,26 @@ def start_vault_watcher() -> None:
             return
         try:
             from watchdog.observers import Observer
-            from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
+            from watchdog.events import FileSystemEventHandler
 
             class _VaultHandler(FileSystemEventHandler):
-                def _handle(self, event):
+                def _handle(self, event, event_type: str):
                     if event.is_directory:
                         return
                     path = Path(event.src_path)
                     if path.suffix == ".md":
+                        logger.info("Vault %s detected: %s", event_type, path.name)
                         threading.Thread(
                             target=_debounced_index,
-                            args=(path,),
+                            args=(path, event_type),
                             daemon=True,
                         ).start()
 
                 def on_modified(self, event):
-                    self._handle(event)
+                    self._handle(event, "modified")
 
                 def on_created(self, event):
-                    self._handle(event)
+                    self._handle(event, "created")
 
             observer = Observer()
             observer.schedule(_VaultHandler(), VAULT_PATH, recursive=True)

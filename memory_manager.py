@@ -184,8 +184,10 @@ def run_memory_pipeline(transcript: str) -> dict:
     content, filename = format_memory_note(topic, insights, related_files)
     vault_path = f"{MEMORY_DIR}/{filename}"
 
-    # Step 4: Write to vault (write_vault handles dir creation + ChromaDB indexing)
+    # Step 4: Write to vault and index with the pipeline timestamp
+    pipeline_ts = datetime.now().isoformat()
     write_result = write_vault(vault_path, content)
+    vector.index_file(vault_path, content, pipeline_ts)
 
     # Step 5: Git commit/push
     sync_result = sync_vault()

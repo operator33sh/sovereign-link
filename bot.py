@@ -14,7 +14,6 @@ import vector
 from tools import write_vault, sync_vault
 from memory_manager import run_memory_pipeline
 
-vector.start_vault_watcher()
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -24,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
+
+AUTO_MEMORY_EVERY = 20  # trigger memory pipeline every N user messages
+_message_count = 0
 
 
 def _strip_timestamps(text: str) -> str:
@@ -140,6 +142,7 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     write_result = write_vault(file_name, note)
+    vector.index_file(file_name, note, timestamp.isoformat())
     sync_result = sync_vault()
 
     await update.message.reply_text(
@@ -274,9 +277,10 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_authorized(update):
         return
 
-    # Auto-save memory when context is nearly full (18/20 messages)
-    history = context.get_history()
-    if len(history) >= 18:
+    global _message_count
+    _message_count += 1
+    if _message_count % AUTO_MEMORY_EVERY == 0:
+        history = context.get_history()
         transcript = "\n".join(
             f"{m['role'].upper()}: {m.get('content', '')}"
             for m in history

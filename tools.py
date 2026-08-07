@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import httpx
 import trafilatura
 
-from vector import index_file, search_vault_semantic as _search_vault_semantic
+from vector import search_vault_semantic as _search_vault_semantic
 
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
@@ -32,7 +32,6 @@ def write_vault(file_name: str, content: str) -> str:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-        index_file(file_name, content)
         return f"Written successfully to '{file_name}'"
     except Exception as e:
         return f"Error writing file: {e}"
@@ -193,7 +192,8 @@ TOOL_DEFINITIONS = [
                 "A background Sovereign Memory Engine writes SovereignLog files to the vault automatically — "
                 "content may exist even if write_vault was never called in this session. "
                 "Use this to find relevant notes by meaning and context rather than exact filenames. "
-                "Returns the top 5 most relevant text fragments."
+                "Returns the top 5 most relevant text fragments, each prefixed with its filename and "
+                "ISO 8601 timestamp so you can reason about temporal evolution of insights."
             ),
             "parameters": {
                 "type": "object",
