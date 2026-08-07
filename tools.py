@@ -189,6 +189,9 @@ TOOL_DEFINITIONS = [
             "name": "search_vault_semantic",
             "description": (
                 "Semantic search across the entire fractalisme vault using vector embeddings. "
+                "ALWAYS call this before claiming that information is missing or unknown. "
+                "A background Sovereign Memory Engine writes SovereignLog files to the vault automatically — "
+                "content may exist even if write_vault was never called in this session. "
                 "Use this to find relevant notes by meaning and context rather than exact filenames. "
                 "Returns the top 5 most relevant text fragments."
             ),
