@@ -14,6 +14,8 @@ import vector
 from tools import write_vault, sync_vault
 from memory_manager import run_memory_pipeline
 
+vector.start_vault_watcher()
+
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,

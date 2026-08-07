@@ -1,7 +1,13 @@
+import logging
 import os
+import threading
+import time
+from pathlib import Path
 
 import chromadb
 import httpx
+
+logger = logging.getLogger(__name__)
 
 EMBED_BASE_URL = os.environ.get("EMBED_BASE_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
@@ -10,6 +16,7 @@ VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-va
 
 CHUNK_SIZE = 1500   # ~375 tokens
 CHUNK_OVERLAP = 150
+DISTANCE_THRESHOLD = 0.8  # cosine distance above this = not relevant
 
 _chroma = chromadb.PersistentClient(path=CHROMA_PATH)
 _collection = _chroma.get_or_create_collection("vault")
@@ -73,12 +80,7 @@ def random_chunk() -> str | None:
 
 
 def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None = None) -> list[str]:
-    """Return unique file names of the most semantically related vault notes.
-
-    Args:
-        path_prefix: If set, restrict results to files whose name starts with this prefix
-                     (e.g. "memory/" to search only sovereign memory logs).
-    """
+    """Return unique file names of the most semantically related vault notes."""
     total = _collection.count()
     if total == 0:
         return []
@@ -93,7 +95,7 @@ def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None =
         try:
             kwargs["where"] = {"file_name": {"$contains": path_prefix}}
         except Exception:
-            pass  # will post-filter below if ChromaDB rejects the operator
+            pass
 
     results = _collection.query(**kwargs)
 
@@ -102,7 +104,7 @@ def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None =
     for meta in results["metadatas"][0]:
         name = meta["file_name"]
         if path_prefix and not name.startswith(path_prefix):
-            continue  # post-filter fallback for older ChromaDB versions
+            continue
         if name not in seen:
             seen.add(name)
             files.append(name)
@@ -112,9 +114,8 @@ def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None =
 def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | None = None) -> str:
     """Semantic search returning formatted text chunks.
 
-    Args:
-        path_prefix: If set, restrict results to files whose name starts with this prefix
-                     (e.g. "memory/" to search only sovereign memory logs).
+    Chunks with a cosine distance above DISTANCE_THRESHOLD are suppressed
+    so the assistant never receives hallucinated proximity results.
     """
     total = _collection.count()
     if total == 0:
@@ -124,13 +125,13 @@ def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | Non
     kwargs: dict = {
         "query_embeddings": [query_embedding],
         "n_results": min(n_results, total),
-        "include": ["documents", "metadatas"],
+        "include": ["documents", "metadatas", "distances"],
     }
     if path_prefix:
         try:
             kwargs["where"] = {"file_name": {"$contains": path_prefix}}
         except Exception:
-            pass  # will post-filter below
+            pass
 
     results = _collection.query(**kwargs)
 
@@ -138,12 +139,86 @@ def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | Non
         return "Geen relevante fragmenten gevonden."
 
     parts = []
-    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+    for doc, meta, dist in zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["distances"][0],
+    ):
         if path_prefix and not meta["file_name"].startswith(path_prefix):
-            continue  # post-filter fallback
+            continue
+        if dist > DISTANCE_THRESHOLD:
+            continue  # suppress irrelevant results rather than hallucinate proximity
         parts.append(f"[{meta['file_name']}]\n{doc}")
 
     if not parts:
         return "Geen relevante fragmenten gevonden."
 
     return "\n\n---\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Filesystem watcher — indexes any .md file written outside write_vault
+# ---------------------------------------------------------------------------
+
+_watcher_started = False
+_watcher_lock = threading.Lock()
+_debounce_delay = 2.0  # seconds to wait after last event before indexing
+
+
+def _index_path(path: Path) -> None:
+    """Index a single vault file by its absolute path."""
+    vault = Path(VAULT_PATH)
+    try:
+        rel = str(path.relative_to(vault))
+        content = path.read_text(encoding="utf-8")
+        if content.strip():
+            index_file(rel, content)
+            logger.info("Watcher indexed: %s", rel)
+    except Exception:
+        logger.exception("Watcher failed to index %s", path)
+
+
+def _debounced_index(path: Path) -> None:
+    """Sleep briefly then index — absorbs rapid successive writes to the same file."""
+    time.sleep(_debounce_delay)
+    _index_path(path)
+
+
+def start_vault_watcher() -> None:
+    """Start a background watchdog Observer on VAULT_PATH (idempotent)."""
+    global _watcher_started
+    with _watcher_lock:
+        if _watcher_started:
+            return
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
+
+            class _VaultHandler(FileSystemEventHandler):
+                def _handle(self, event):
+                    if event.is_directory:
+                        return
+                    path = Path(event.src_path)
+                    if path.suffix == ".md":
+                        threading.Thread(
+                            target=_debounced_index,
+                            args=(path,),
+                            daemon=True,
+                        ).start()
+
+                def on_modified(self, event):
+                    self._handle(event)
+
+                def on_created(self, event):
+                    self._handle(event)
+
+            observer = Observer()
+            observer.schedule(_VaultHandler(), VAULT_PATH, recursive=True)
+            observer.daemon = True
+            observer.start()
+            _watcher_started = True
+            logger.info("Vault watcher started on %s", VAULT_PATH)
+        except ImportError:
+            logger.warning("watchdog not installed — filesystem watcher disabled")
+        except Exception:
+            logger.exception("Failed to start vault watcher")

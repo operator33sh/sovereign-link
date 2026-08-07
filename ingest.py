@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""One-shot script to index all vault .md files into ChromaDB."""
+"""Index all vault .md files into ChromaDB.
+
+Usage:
+    python ingest.py           # one-shot full index
+    python ingest.py --watch   # full index then watch for changes
+"""
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from vector import index_file, VAULT_PATH
+from vector import index_file, start_vault_watcher, VAULT_PATH
 
 
 def ingest_all() -> None:
@@ -31,4 +36,14 @@ def ingest_all() -> None:
 
 
 if __name__ == "__main__":
+    watch_mode = "--watch" in sys.argv
     ingest_all()
+    if watch_mode:
+        start_vault_watcher()
+        print(f"Watching {VAULT_PATH} for changes (Ctrl+C to stop)...")
+        try:
+            import time
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Watcher stopped.")
