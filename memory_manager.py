@@ -186,8 +186,7 @@ def run_memory_pipeline(transcript: str) -> dict:
 
     # Step 4: Write to vault and index with the pipeline timestamp
     pipeline_ts = datetime.now().isoformat()
-    write_result = write_vault(vault_path, content)
-    vector.index_file(vault_path, content, pipeline_ts)
+    write_result = write_vault(vault_path, content, pipeline_ts)
 
     # Step 5: Git commit/push
     sync_result = sync_vault()

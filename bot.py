@@ -141,8 +141,7 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         + (f"\n{tags_str}\n" if tags_str else "")
     )
 
-    write_result = write_vault(file_name, note)
-    vector.index_file(file_name, note, timestamp.isoformat())
+    write_result = write_vault(file_name, note, timestamp.isoformat())
     sync_result = sync_vault()
 
     await update.message.reply_text(

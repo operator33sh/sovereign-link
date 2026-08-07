@@ -1,12 +1,17 @@
+import logging
 import os
 import random
 import subprocess
+from datetime import datetime
 from urllib.parse import urlparse
 
 import httpx
 import trafilatura
 
+from vector import index_file as _index_file
 from vector import search_vault_semantic as _search_vault_semantic
+
+logger = logging.getLogger(__name__)
 
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
@@ -24,7 +29,7 @@ def read_vault(file_name: str) -> str:
         return f"Error reading file: {e}"
 
 
-def write_vault(file_name: str, content: str) -> str:
+def write_vault(file_name: str, content: str, timestamp: str | None = None) -> str:
     path = os.path.join(VAULT_PATH, file_name)
     if not os.path.realpath(path).startswith(os.path.realpath(VAULT_PATH)):
         return "Error: path traversal not allowed"
@@ -32,9 +37,15 @@ def write_vault(file_name: str, content: str) -> str:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-        return f"Written successfully to '{file_name}'"
     except Exception as e:
         return f"Error writing file: {e}"
+
+    try:
+        _index_file(file_name, content, timestamp or datetime.now().isoformat())
+    except Exception:
+        logger.exception("write_vault: failed to index %s", file_name)
+
+    return f"Written successfully to '{file_name}'"
 
 
 def sync_vault() -> str:
