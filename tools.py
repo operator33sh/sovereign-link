@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
 
+def generate_time_tag() -> str:
+    """Return a chronological search tag for the current month, e.g. '#2026-08'."""
+    return datetime.now().strftime("#%Y-%m")
+
+
 def read_vault(file_name: str) -> str:
     path = os.path.join(VAULT_PATH, file_name)
     if not os.path.realpath(path).startswith(os.path.realpath(VAULT_PATH)):
@@ -204,7 +209,10 @@ TOOL_DEFINITIONS = [
                 "content may exist even if write_vault was never called in this session. "
                 "Use this to find relevant notes by meaning and context rather than exact filenames. "
                 "Returns the top 5 most relevant text fragments, each prefixed with its filename and "
-                "ISO 8601 timestamp so you can reason about temporal evolution of insights."
+                "ISO 8601 timestamp so you can reason about temporal evolution of insights. "
+                "Every entry is tagged with a chronological search tag in the format #YYYY-MM (e.g. #2026-08). "
+                "To filter for recent entries, include the current month tag in your query (e.g. '#2026-08 zelfzorg'). "
+                "To search across a specific period, combine month tags with your topic keywords."
             ),
             "parameters": {
                 "type": "object",

@@ -72,7 +72,9 @@ def format_memory_note(
     Returns:
         (content, filename) where filename follows YYYY-MM-DD_TOPIC_SovereignLog.md
     """
+    from tools import generate_time_tag
     today = datetime.now().strftime("%Y-%m-%d")
+    time_tag = generate_time_tag()
     filename = f"{today}_{topic}_SovereignLog.md"
 
     related_links = [
@@ -81,7 +83,7 @@ def format_memory_note(
         if f != f"{MEMORY_DIR}/{filename}"
     ]
 
-    lines = [f"## Sovereign Memory Log — {topic.replace('_', ' ')}\n"]
+    lines = [f"## Sovereign Memory Log — {topic.replace('_', ' ')} {time_tag}\n"]
 
     for i, insight in enumerate(insights, start=1):
         tags = insight.get("tags", [])
@@ -100,7 +102,7 @@ def format_memory_note(
         )
 
         lines.append(f"### Insight {i}\n")
-        lines.append(f"- Timestamp: {insight.get('timestamp', today)}")
+        lines.append(f"- Timestamp: {insight.get('timestamp', today)} {time_tag}")
         lines.append(f"- Core Insight: {insight.get('core_insight', '')}")
         lines.append(f"- Emotional/Psychological State: {insight.get('emotional_state', 'Unknown')}")
         lines.append(f"- Related Tags: {tags_str}")

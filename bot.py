@@ -11,7 +11,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import context
 import llm
 import vector
-from tools import write_vault, sync_vault
+from tools import write_vault, sync_vault, generate_time_tag
 from memory_manager import run_memory_pipeline
 
 
@@ -165,7 +165,7 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     links_str = "  ".join(related_links)
 
     note = (
-        f"## {timestamp.strftime('%Y-%m-%d %H:%M')} — {titel.replace('-', ' ')}\n\n"
+        f"## {timestamp.strftime('%Y-%m-%d %H:%M')} {generate_time_tag()} — {titel.replace('-', ' ')}\n\n"
         f"{samenvatting}\n"
         + (f"\n### Zie ook\n{links_str}\n" if links_str else "")
         + (f"\n{tags_str}\n" if tags_str else "")

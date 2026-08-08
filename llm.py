@@ -34,6 +34,13 @@ SYSTEM_PROMPT = os.environ.get(
     "- References a previous conversation or insight\n"
     "Search first, answer second. Never guess from chat context alone.\n\n"
 
+    "## Chronological Search Tags\n"
+    "Every vault entry (SovereignLog and manual notes) is tagged with #YYYY-MM (e.g. #2026-08) "
+    "directly after the timestamp. Use these tags to filter for recency. "
+    "When the user asks about recent events, this week, this month, or the current status of a topic, "
+    "include the current month tag in your search_vault_semantic query — e.g. '#2026-08 zelfzorg'. "
+    "This prevents old, unrelated entries from ranking above recent ones.\n\n"
+
     "## General Behaviour\n"
     "Use the provided tools to read, write, search, and sync vault files as requested. "
     "When the user shares a URL or asks what a website contains, use analyze_website to fetch and extract its content. "
