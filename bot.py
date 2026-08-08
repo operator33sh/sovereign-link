@@ -5,6 +5,8 @@ import os
 import re
 from datetime import datetime
 
+AUDIO_TMP_DIR = "/tmp/audio_transcription"
+
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -296,6 +298,70 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await status.edit_text(_strip_timestamps(reply))
 
 
+async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+
+    global _message_count, _messages_since_last_memory
+    _message_count += 1
+    _messages_since_last_memory += 1
+
+    # Typing indicator immediately so the user knows transcription has started
+    async def keep_typing():
+        while True:
+            try:
+                await update.message.chat.send_action("typing")
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    typing_task = asyncio.create_task(keep_typing())
+
+    try:
+        if update.message.voice:
+            tg_file_id = update.message.voice.file_id
+            extension = ".ogg"
+        else:
+            audio = update.message.audio
+            tg_file_id = audio.file_id
+            extension = os.path.splitext(audio.file_name or ".mp3")[1] or ".mp3"
+
+        logger.info("Received audio file_id=%s ext=%s", tg_file_id, extension)
+
+        os.makedirs(AUDIO_TMP_DIR, exist_ok=True)
+        tg_file = await ctx.bot.get_file(tg_file_id)
+        tmp_path = os.path.join(AUDIO_TMP_DIR, f"{tg_file_id}{extension}")
+        await tg_file.download_to_drive(tmp_path)
+
+        transcription = await asyncio.to_thread(llm.transcribe_audio, tmp_path)
+        logger.info("Transcription: %s", transcription[:120])
+
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+        if not transcription:
+            typing_task.cancel()
+            await update.message.reply_text("Kon geen tekst uit het audiobericht halen.")
+            return
+
+        reply = await asyncio.to_thread(llm.run, transcription)
+
+    except Exception as e:
+        logger.exception("Audio transcription error")
+        typing_task.cancel()
+        await update.message.reply_text(f"Fout bij verwerken audiobericht: {e}")
+        return
+
+    typing_task.cancel()
+    await update.message.reply_text(
+        f"_{transcription}_\n\n{_strip_timestamps(reply)}",
+        parse_mode="Markdown",
+    )
+    _save_session_draft()
+
+
 async def _auto_memory_background(update: Update, transcript: str) -> None:
     """Fire-and-forget background task: run memory pipeline silently."""
     global _messages_since_last_memory
@@ -388,5 +454,6 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("whisper", cmd_whisper))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return app

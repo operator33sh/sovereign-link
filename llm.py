@@ -10,6 +10,19 @@ from tools import TOOL_DEFINITIONS, TOOL_HANDLERS
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+
+WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "small")
+
+_whisper_model = None
+
+def _get_whisper():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+    return _whisper_model
+
+
 SYSTEM_PROMPT = os.environ.get(
     "SYSTEM_PROMPT",
     "You are a personal assistant deeply integrated with the user's fractalisme vault — a Sovereign Memory system.\n\n"
@@ -222,6 +235,13 @@ def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jp
         return text
 
     return "Error: tool call loop exceeded maximum iterations"
+
+
+def transcribe_audio(file_path: str) -> str:
+    """Transcribe an audio file locally using faster-whisper."""
+    model = _get_whisper()
+    segments, _ = model.transcribe(file_path)
+    return " ".join(seg.text for seg in segments).strip()
 
 
 def run(user_message: str) -> str:
