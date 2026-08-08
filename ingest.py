@@ -6,6 +6,7 @@ Usage:
     python ingest.py --rescan  # full vault rescan, then exit
 """
 import logging
+import re
 import sys
 import time
 from datetime import datetime
@@ -39,7 +40,12 @@ def ingest_all() -> None:
             print(f"[{i}/{len(md_files)}] Skipping empty: {rel}")
             continue
         print(f"[{i}/{len(md_files)}] Indexing: {rel}")
-        mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+        mtime_dt = datetime.fromtimestamp(path.stat().st_mtime)
+        mtime = mtime_dt.isoformat()
+        if not re.search(r"#\d{4}-\d{2}", content):
+            time_tag = mtime_dt.strftime("#%Y-%m")
+            content = f"{time_tag}\n\n{content}"
+            print(f"[{i}/{len(md_files)}]   → injected {time_tag} from mtime")
         index_file(rel, content, mtime)
 
     print("\nDone! Vault fully indexed.")
