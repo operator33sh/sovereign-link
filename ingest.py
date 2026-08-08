@@ -7,6 +7,7 @@ Usage:
 """
 import logging
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -22,6 +23,36 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
+
+
+_DATE_IN_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})")
+_TIMETAG_IN_CONTENT = re.compile(r"#\d{4}-\d{2}")
+
+
+def _date_from_filename(path: Path) -> datetime | None:
+    m = _DATE_IN_NAME.search(path.stem)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
+
+
+def _date_from_git(path: Path, vault: Path) -> datetime | None:
+    try:
+        rel = str(path.relative_to(vault))
+        result = subprocess.run(
+            ["git", "-C", str(vault), "log", "--diff-filter=A", "--follow",
+             "--format=%aI", "--", rel],
+            capture_output=True, text=True, timeout=5,
+        )
+        first_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if first_line:
+            return datetime.fromisoformat(first_line)
+    except Exception:
+        pass
+    return None
 
 
 def ingest_all() -> None:
@@ -40,12 +71,23 @@ def ingest_all() -> None:
             print(f"[{i}/{len(md_files)}] Skipping empty: {rel}")
             continue
         print(f"[{i}/{len(md_files)}] Indexing: {rel}")
-        mtime_dt = datetime.fromtimestamp(path.stat().st_mtime)
-        mtime = mtime_dt.isoformat()
-        if not re.search(r"#\d{4}-\d{2}", content):
-            time_tag = mtime_dt.strftime("#%Y-%m")
-            content = f"{time_tag}\n\n{content}"
-            print(f"[{i}/{len(md_files)}]   → injected {time_tag} from mtime")
+
+        # Use mtime only as fallback for the vector DB timestamp field
+        mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+
+        if not _TIMETAG_IN_CONTENT.search(content):
+            date_dt = _date_from_filename(path)
+            source = "filename"
+            if date_dt is None:
+                date_dt = _date_from_git(path, vault)
+                source = "git"
+            if date_dt:
+                time_tag = date_dt.strftime("#%Y-%m")
+                content = f"{time_tag}\n\n{content}"
+                print(f"[{i}/{len(md_files)}]   → injected {time_tag} (from {source})")
+            else:
+                print(f"[{i}/{len(md_files)}]   → no date found, skipping tag injection")
+
         index_file(rel, content, mtime)
 
     print("\nDone! Vault fully indexed.")
