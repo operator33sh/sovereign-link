@@ -26,6 +26,33 @@ ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 
 AUTO_MEMORY_EVERY = 20  # trigger memory pipeline every N user messages
 _message_count = 0
+_messages_since_last_memory = 0
+
+SESSION_DRAFT_PATH = "memory/session_draft.md"
+
+
+def _save_session_draft() -> None:
+    """Write raw conversation transcript to vault as a crash-safe draft."""
+    history = context.get_history()
+    if not history:
+        return
+    lines = ["# Session Draft (auto-generated, safe to delete)\n"]
+    for m in history:
+        if m.get("content") and isinstance(m["content"], str):
+            lines.append(f"**{m['role'].upper()}:** {m['content']}\n")
+    write_vault(SESSION_DRAFT_PATH, "\n".join(lines))
+
+
+def _delete_session_draft() -> None:
+    """Remove the session draft after a proper memory save."""
+    import os
+    from vector import VAULT_PATH
+    path = os.path.join(VAULT_PATH, SESSION_DRAFT_PATH)
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
 
 
 def _strip_timestamps(text: str) -> str:
@@ -67,6 +94,9 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             memory_result = await asyncio.to_thread(run_memory_pipeline, transcript)
             memory_note = memory_result["file_name"]
+            global _messages_since_last_memory
+            _messages_since_last_memory = 0
+            _delete_session_draft()
         except Exception:
             logger.exception("Auto-memory on clear failed")
         finally:
@@ -176,6 +206,9 @@ async def cmd_memory(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     typing_task = asyncio.create_task(keep_typing())
     try:
         result = await asyncio.to_thread(run_memory_pipeline, transcript)
+        global _messages_since_last_memory
+        _messages_since_last_memory = 0
+        _delete_session_draft()
     except Exception as e:
         logger.exception("Memory pipeline error")
         typing_task.cancel()
@@ -265,8 +298,11 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _auto_memory_background(update: Update, transcript: str) -> None:
     """Fire-and-forget background task: run memory pipeline silently."""
+    global _messages_since_last_memory
     try:
         result = await asyncio.to_thread(run_memory_pipeline, transcript)
+        _messages_since_last_memory = 0
+        _delete_session_draft()
         logger.info("Sovereign Memory auto-saved: %s", result['file_name'])
     except Exception:
         logger.exception("Background auto-memory pipeline error")
@@ -276,8 +312,9 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_authorized(update):
         return
 
-    global _message_count
+    global _message_count, _messages_since_last_memory
     _message_count += 1
+    _messages_since_last_memory += 1
     if _message_count % AUTO_MEMORY_EVERY == 0:
         history = context.get_history()
         transcript = "\n".join(
@@ -308,6 +345,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         typing_task.cancel()
 
     await update.message.reply_text(_strip_timestamps(reply))
+    _save_session_draft()
 
 
 async def _set_commands(app: Application) -> None:
@@ -320,8 +358,30 @@ async def _set_commands(app: Application) -> None:
     ])
 
 
+async def _on_shutdown(app: Application) -> None:
+    """Save unsaved messages to memory on bot shutdown."""
+    if _messages_since_last_memory == 0:
+        return
+    history = context.get_history()
+    if not history:
+        return
+    transcript = "\n".join(
+        f"{m['role'].upper()}: {m.get('content', '')}"
+        for m in history
+        if m.get("content") and isinstance(m["content"], str)
+    )
+    if not transcript.strip():
+        return
+    logger.info("Shutdown: saving %d unsaved messages to Sovereign Memory...", _messages_since_last_memory)
+    try:
+        result = await asyncio.to_thread(run_memory_pipeline, transcript)
+        logger.info("Shutdown memory saved: %s", result["file_name"])
+    except Exception:
+        logger.exception("Shutdown memory pipeline failed")
+
+
 def build_app() -> Application:
-    app = Application.builder().token(TELEGRAM_TOKEN).post_init(_set_commands).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).post_init(_set_commands).post_shutdown(_on_shutdown).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("vault", cmd_vault))
