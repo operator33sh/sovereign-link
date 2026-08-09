@@ -69,7 +69,7 @@ _VAULT_PROMPT = (
     "Use the provided tools to read, write, search, and sync vault files as requested. "
     "When the user shares a URL or asks what a website contains, use analyze_website to fetch and extract its content. "
     "After fetching a page, summarize the key points before offering to save them to the vault. "
-    "Be concise and direct.",
+    "Be concise and direct."
 )
 
 SYSTEM_PROMPT = os.environ.get(
