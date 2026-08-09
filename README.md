@@ -1,32 +1,43 @@
 # Sovereign-Link
 
-A private Telegram bot that gives you conversational access to your local [Obsidian](https://obsidian.md/) vault (or any folder of Markdown files). It runs entirely on your own machine using a local LLM via [Ollama](https://ollama.com/), so no data leaves your infrastructure.
+A private Telegram bot that gives you conversational access to your local [Obsidian](https://obsidian.md/) vault (or any folder of Markdown files). Runs entirely on your own machine — no data leaves your infrastructure.
 
 ## Features
 
 - **Chat with your vault** — ask questions, get summaries, or search by meaning across all your notes
-- **Semantic search (RAG)** — uses `nomic-embed-text` embeddings + ChromaDB to find relevant fragments by context, not just filenames
+- **Semantic search (RAG)** — `nomic-embed-text` embeddings + ChromaDB find relevant fragments by context, not just filenames
 - **Read & write notes** — the AI can read existing vault files or create new ones on your behalf
-- **Vault snapshots** — `/vault` command summarizes the last 5 exchanges and saves a structured note, then pushes it to git
-- **Git sync** — all writes are committed and pushed automatically
-- **Fully local & private** — LLM runs via Ollama, embeddings run via Ollama, vector DB runs locally with ChromaDB
+- **Sovereign Memory Engine** — automatically extracts High-Value Insights (HVIs) from conversations and saves them as structured `SovereignLog` files in the vault; relevant past memories are injected into the system prompt at session start
+- **Memory continuity** — memory is extracted automatically every 20 messages, on `/clear`, and on bot shutdown so nothing is ever lost
+- **PageIndex** — reasoning-based retrieval that traverses the vault's heading hierarchy using an LLM instead of vectors; works alongside ChromaDB for higher-precision lookups
+- **Vault watcher** — a background filesystem observer auto-indexes any `.md` file written to the vault outside of the bot (e.g. from Obsidian directly)
+- **Voice transcription** — send voice messages or audio files; transcribed locally using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) before being sent to the LLM
+- **Image understanding** — send photos with an optional caption; the LLM analyses them inline
+- **Website analysis** — share a URL and the bot fetches and extracts the page content (via trafilatura) for summarisation or saving
+- **Vault snapshots** — `/vault` summarises the last 5 exchanges and saves a structured note with wikilinks to related files
+- **Git sync** — all vault writes are committed and pushed automatically
+- **Fully local & private** — LLM, embeddings, transcription, and vector DB all run on your own hardware; optionally point the main LLM at a cloud provider via `OLLAMA_BASE_URL`/`OLLAMA_API_KEY`
 
 ## Architecture
 
 ```
-Telegram ──► bot.py ──► llm.py ──► Ollama (local LLM)
+Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
+                   │         └──► tools.py ──► read_vault / write_vault / sync_vault
+                   │                      └──► analyze_website (trafilatura)
+                   │                      └──► vector.py (semantic search, ChromaDB)
                    │
-                   └──► tools.py ──► read_vault / write_vault / sync_vault
-                              └──► vector.py ──► Ollama (nomic-embed-text)
-                                           └──► ChromaDB (local)
+                   ├──► memory_manager.py ──► Sovereign Memory Engine (HVI extraction)
+                   │         └──► vector.py ──► ChromaDB (cosine search)
+                   │
+                   └──► pageindex.py ──► reasoning-based retrieval (LLM tree traversal)
 ```
 
 ## Requirements
 
 - Python 3.11+
-- [Ollama](https://ollama.com/) running locally
+- [Ollama](https://ollama.com/) running locally (or any OpenAI-compatible API endpoint)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- A vault directory of Markdown files (e.g. an Obsidian vault with git initialized)
+- A vault directory of Markdown files (e.g. an Obsidian vault with git initialised)
 
 ## Setup
 
@@ -47,7 +58,7 @@ python3 -m venv .venv
 ### 3. Pull the required Ollama models
 
 ```bash
-ollama pull llama3.1          # or whichever model you prefer
+ollama pull llama3.1          # or whichever chat model you prefer
 ollama pull nomic-embed-text  # for semantic search embeddings
 ```
 
@@ -58,23 +69,46 @@ Create a `.env` file in the project root:
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 ALLOWED_USER_ID=your_telegram_user_id        # only this user can interact with the bot
+
 VAULT_PATH=/path/to/your/vault               # local folder of .md files
-OLLAMA_BASE_URL=http://localhost:11434        # Ollama API base URL
-OLLAMA_MODEL=llama3.1                        # LLM model to use
-EMBED_MODEL=nomic-embed-text                 # embedding model for semantic search
+
+# Main LLM (can be Ollama or any OpenAI-compatible endpoint)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_API_KEY=                              # leave empty for local Ollama
+OLLAMA_MODEL=llama3.1
+
+# Embeddings (always local Ollama)
+EMBED_BASE_URL=http://localhost:11434
+EMBED_MODEL=nomic-embed-text
 CHROMA_PATH=~/.sovereign-link/chroma         # where ChromaDB stores its index
-SYSTEM_PROMPT=You are a personal assistant...  # optional: customize the system prompt
+
+# PageIndex (reasoning-based retrieval) — optional, defaults shown
+# PAGEINDEX_LLM_BASE_URL=http://localhost:11434
+# PAGEINDEX_LLM_MODEL=llama3.2
+# PAGEINDEX_PATH=~/.sovereign-link/pageindex.json
+
+# Voice transcription — optional, defaults shown
+# WHISPER_MODEL=small                        # tiny / base / small / medium / large
+
+# Custom system prompt — optional
+# SYSTEM_PROMPT=You are a personal assistant...
 ```
 
 To find your Telegram user ID, message [@userinfobot](https://t.me/userinfobot).
 
 ### 5. Index your vault (first time only)
 
+**ChromaDB semantic index:**
 ```bash
 .venv/bin/python ingest.py
 ```
 
-This crawls all `.md` files in your vault, chunks them, and stores embeddings in ChromaDB. Re-run this if you add files outside of the bot (files written via the bot are indexed automatically).
+**PageIndex (reasoning-based index) — optional but recommended:**
+```bash
+.venv/bin/python ingest_pageindex.py
+```
+
+Re-run either script if you add many files outside of the bot. Files written via the bot are indexed automatically.
 
 ### 6. Run the bot
 
@@ -104,22 +138,38 @@ journalctl -u sovereign-link -f
 | Command | Description |
 |---------|-------------|
 | `/start` | Check if the bot is online |
-| `/clear` | Clear the current conversation context |
-| `/vault` | Summarize the last 5 exchanges as a structured vault note and push to git |
+| `/clear` | Clear the current session context and save a memory log |
+| `/vault` | Summarise the last 5 exchanges as a structured vault note and push to git |
+| `/memory` | Manually trigger the Sovereign Memory Engine on the current conversation |
+| `/whisper` | Generate a tweet-length insight from a random vault fragment |
 
-Any other message is treated as a chat message to the LLM. The AI can decide to use tools (read files, write files, semantic search) based on your request.
+Any other text message is handled by the LLM with access to all tools. Voice messages and photos are also supported directly.
+
+## Sovereign Memory Engine
+
+The memory engine runs as part of the bot (no separate process needed). It:
+
+1. Scans the conversation for High-Value Insights — psychological breakthroughs, redefined values, recurring patterns, or architectural decisions
+2. Searches the vault for related prior memory logs to build associative `[[wikilinks]]`
+3. Writes a structured `SovereignLog` file to `memory/YYYY-MM-DD_TOPIC_SovereignLog.md`
+4. Commits and pushes the result to git
+
+Memory is triggered automatically every 20 messages, on `/clear`, and on bot shutdown. At the start of each new session the top 3 most relevant past memory logs are injected into the system prompt.
 
 ## Project structure
 
 ```
 sovereign-link/
-├── main.py          # Entry point
-├── bot.py           # Telegram handlers
-├── llm.py           # Ollama LLM client + tool call loop
-├── context.py       # In-memory conversation history
-├── tools.py         # Vault tools (read, write, sync, semantic search)
-├── vector.py        # ChromaDB + Ollama embedding logic
-├── ingest.py        # One-shot vault indexing script
+├── main.py               # Entry point
+├── bot.py                # Telegram handlers and command routing
+├── llm.py                # Ollama LLM client, tool call loop, audio transcription
+├── context.py            # In-memory conversation history
+├── tools.py              # Vault tools: read, write, sync, semantic search, web fetch
+├── vector.py             # ChromaDB + Ollama embedding logic + filesystem watcher
+├── memory_manager.py     # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
+├── pageindex.py          # Reasoning-based retrieval (LLM-driven heading tree traversal)
+├── ingest.py             # One-shot ChromaDB vault indexer
+├── ingest_pageindex.py   # One-shot PageIndex vault indexer
 ├── requirements.txt
 └── sovereign-link.service  # systemd unit
 ```
