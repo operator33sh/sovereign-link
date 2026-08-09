@@ -9,7 +9,6 @@ A private Telegram bot that gives you conversational access to your local [Obsid
 - **Read & write notes** — the AI can read existing vault files or create new ones on your behalf
 - **Sovereign Memory Engine** — automatically extracts High-Value Insights (HVIs) from conversations and saves them as structured `SovereignLog` files in the vault; relevant past memories are injected into the system prompt at session start
 - **Memory continuity** — memory is extracted automatically every 20 messages, on `/clear`, and on bot shutdown so nothing is ever lost
-- **PageIndex** — reasoning-based retrieval that traverses the vault's heading hierarchy using an LLM instead of vectors; works alongside ChromaDB for higher-precision lookups
 - **Vault watcher** — a background filesystem observer auto-indexes any `.md` file written to the vault outside of the bot (e.g. from Obsidian directly)
 - **Voice transcription** — send voice messages or audio files; transcribed locally using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) before being sent to the LLM
 - **Image understanding** — send photos with an optional caption; the LLM analyses them inline
@@ -26,10 +25,8 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
                    │                      └──► analyze_website (trafilatura)
                    │                      └──► vector.py (semantic search, ChromaDB)
                    │
-                   ├──► memory_manager.py ──► Sovereign Memory Engine (HVI extraction)
-                   │         └──► vector.py ──► ChromaDB (cosine search)
-                   │
-                   └──► pageindex.py ──► reasoning-based retrieval (LLM tree traversal)
+                   └──► memory_manager.py ──► Sovereign Memory Engine (HVI extraction)
+                             └──► vector.py ──► ChromaDB (cosine search)
 ```
 
 ## Requirements
@@ -82,11 +79,6 @@ EMBED_BASE_URL=http://localhost:11434
 EMBED_MODEL=nomic-embed-text
 CHROMA_PATH=~/.sovereign-link/chroma         # where ChromaDB stores its index
 
-# PageIndex (reasoning-based retrieval) — optional, defaults shown
-# PAGEINDEX_LLM_BASE_URL=http://localhost:11434
-# PAGEINDEX_LLM_MODEL=llama3.2
-# PAGEINDEX_PATH=~/.sovereign-link/pageindex.json
-
 # Voice transcription — optional, defaults shown
 # WHISPER_MODEL=small                        # tiny / base / small / medium / large
 
@@ -103,12 +95,7 @@ To find your Telegram user ID, message [@userinfobot](https://t.me/userinfobot).
 .venv/bin/python ingest.py
 ```
 
-**PageIndex (reasoning-based index) — optional but recommended:**
-```bash
-.venv/bin/python ingest_pageindex.py
-```
-
-Re-run either script if you add many files outside of the bot. Files written via the bot are indexed automatically.
+Re-run this script if you add many files outside of the bot. Files written via the bot are indexed automatically.
 
 ### 6. Run the bot
 
@@ -167,9 +154,7 @@ sovereign-link/
 ├── tools.py              # Vault tools: read, write, sync, semantic search, web fetch
 ├── vector.py             # ChromaDB + Ollama embedding logic + filesystem watcher
 ├── memory_manager.py     # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
-├── pageindex.py          # Reasoning-based retrieval (LLM-driven heading tree traversal)
 ├── ingest.py             # One-shot ChromaDB vault indexer
-├── ingest_pageindex.py   # One-shot PageIndex vault indexer
 ├── requirements.txt
 └── sovereign-link.service  # systemd unit
 ```
