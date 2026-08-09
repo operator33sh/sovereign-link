@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import logging
 import os
 import re
@@ -348,18 +349,18 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         reply = await asyncio.to_thread(llm.run, transcription)
 
+        typing_task.cancel()
+        await update.message.reply_text(
+            f"<i>{html.escape(transcription)}</i>",
+            parse_mode="HTML",
+        )
+        await update.message.reply_text(_strip_timestamps(reply))
+        _save_session_draft()
+
     except Exception as e:
         logger.exception("Audio transcription error")
         typing_task.cancel()
         await update.message.reply_text(f"Fout bij verwerken audiobericht: {e}")
-        return
-
-    typing_task.cancel()
-    await update.message.reply_text(
-        f"_{transcription}_\n\n{_strip_timestamps(reply)}",
-        parse_mode="Markdown",
-    )
-    _save_session_draft()
 
 
 async def _auto_memory_background(update: Update, transcript: str) -> None:
