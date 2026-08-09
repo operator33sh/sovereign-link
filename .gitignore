@@ -5,3 +5,4 @@ __pycache__/
 *.pyo
 conversation_history.json
 package-lock.json
+stats/
