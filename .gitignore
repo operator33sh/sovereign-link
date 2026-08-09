@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 *.pyo
 conversation_history.json
+package-lock.json
