@@ -79,6 +79,9 @@ EMBED_BASE_URL=http://localhost:11434
 EMBED_MODEL=nomic-embed-text
 CHROMA_PATH=~/.sovereign-link/chroma         # where ChromaDB stores its index
 
+# Vision model — optional, defaults to OLLAMA_MODEL
+# VISION_MODEL=llava                         # any vision-capable model (llava, qwen3-vl, etc.)
+
 # Voice transcription — optional, defaults shown
 # WHISPER_MODEL=small                        # tiny / base / small / medium / large
 

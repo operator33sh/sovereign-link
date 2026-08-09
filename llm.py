@@ -10,6 +10,7 @@ from tools import TOOL_DEFINITIONS, TOOL_HANDLERS
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+VISION_MODEL = os.environ.get("VISION_MODEL", MODEL)
 
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "small")
 
@@ -193,59 +194,26 @@ def whisper_tweet(chunk: str) -> str:
 
 
 def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jpeg") -> str:
-    """Send a user message with an inline base64 image to the LLM and return the reply."""
+    """Send a user message with an inline base64 image to the LLM via Ollama's native /api/chat."""
     prompt = user_message or "What is in this image?"
-    user_content = [
-        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
-        {"type": "text", "text": prompt},
-    ]
     context.add_message("user", prompt)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     system_with_time = f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
 
-    # Strip tool_calls/tool messages from history — Ollama chokes on those mixed with vision input
-    safe_history = [
-        m for m in context.get_history()[:-1]
-        if m.get("role") not in ("tool",)
-        and not m.get("tool_calls")
-        and isinstance(m.get("content"), str)
-    ]
-    messages = (
-        [{"role": "system", "content": system_with_time}]
-        + safe_history
-        + [{"role": "user", "content": user_content}]
-    )
-
-    for _ in range(5):
-        data = _chat(messages)
-        choice = data["choices"][0]
-        message = choice["message"]
-        finish_reason = choice.get("finish_reason", "stop")
-
-        if finish_reason == "tool_calls" or message.get("tool_calls"):
-            tool_calls = message["tool_calls"]
-            context.add_assistant_with_tool_calls(tool_calls)
-            messages.append({"role": "assistant", "tool_calls": tool_calls})
-
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-                handler = TOOL_HANDLERS.get(fn_name)
-                result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
-                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result}
-                context.add_tool_result(tc["id"], result)
-                messages.append(tool_msg)
-            continue
-
-        text = message.get("content") or ""
-        context.add_message("assistant", text)
-        return text
-
-    return "Error: tool call loop exceeded maximum iterations"
+    payload = {
+        "model": VISION_MODEL,
+        "messages": [
+            {"role": "system", "content": system_with_time},
+            {"role": "user", "content": prompt, "images": [image_b64]},
+        ],
+        "stream": False,
+    }
+    response = _client.post("/api/chat", json=payload)
+    response.raise_for_status()
+    text = response.json()["message"].get("content", "")
+    context.add_message("assistant", text)
+    return text
 
 
 def transcribe_audio(file_path: str) -> str:
