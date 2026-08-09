@@ -42,7 +42,8 @@ Each insight block uses this exact structure:
 
 ```
 - Timestamp: [ISO Date]
-- Core Insight: [one sentence]
+- Narrative: [1-3 sentences: trigger, user experience, and reasoning process that led to the insight]
+- Core Insight: [one sentence: the conclusion or breakthrough]
 - Emotional/Psychological State: [e.g. Vulnerable, Analytical, Transgressive, Integrative]
 - Related Tags: [#shadowwork #Sovereign #AI_Architecture]
 - Connected Nodes: [[wikilink to related log]]
@@ -103,6 +104,7 @@ def format_memory_note(
 
         lines.append(f"### Insight {i}\n")
         lines.append(f"- Timestamp: {insight.get('timestamp', today)} {time_tag}")
+        lines.append(f"- Narrative: {insight.get('narrative', '')}")
         lines.append(f"- Core Insight: {insight.get('core_insight', '')}")
         lines.append(f"- Emotional/Psychological State: {insight.get('emotional_state', 'Unknown')}")
         lines.append(f"- Related Tags: {tags_str}")
@@ -169,6 +171,7 @@ def run_memory_pipeline(transcript: str) -> dict:
     if not insights:
         insights = [{
             "timestamp": datetime.now().strftime("%Y-%m-%d"),
+            "narrative": "No meaningful conversation content was found to extract a narrative from.",
             "core_insight": "No insights extracted from this session.",
             "emotional_state": "Neutral",
             "tags": ["#sovereign"],
