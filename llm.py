@@ -113,7 +113,7 @@ def summarize_to_vault(recent_messages: list) -> dict:
         return {"titel": "aantekening", "samenvatting": raw}
 
 
-def extract_memory_insights(transcript: str) -> dict:
+def extract_memory_insights(transcript: str, prior_memory: str = "") -> dict:
     """Ask the LLM to extract High-Value Insights from a conversation transcript.
 
     Returns a dict with keys:
@@ -136,9 +136,17 @@ def extract_memory_insights(transcript: str) -> dict:
         '    - "core_insight": one sentence summarising the breakthrough or conclusion\n'
         '    - "emotional_state": e.g. Vulnerable, Analytical, Transgressive, Integrative\n'
         '    - "tags": list of Obsidian hashtags e.g. ["#shadowwork", "#Sovereign"]\n'
-        '    - "connected_nodes": list of wikilink strings e.g. ["[[Previous Log]]"] (empty list if none)\n'
+        '    - "connected_nodes": list of [[filename]] wikilinks to the most relevant previous logs '
+        '(use exact filenames from the prior memory context below, empty list if none)\n'
+        '    - "relation_type": describe how this insight relates to a previous one — use one of: '
+        '"Evolution of [[X]]", "Extension of [[X]]", "Contradiction of [[X]]", or null if no clear relation\n'
         '    - "open_questions": list of strings describing unresolved tensions (empty list if none)\n\n'
-        f"Conversation:\n{transcript}\n\n"
+        + (
+            "RELATED PREVIOUS MEMORY LOGS (use these for connected_nodes and narrative references):\n"
+            f"{prior_memory}\n\n"
+            if prior_memory else ""
+        )
+        + f"Conversation:\n{transcript}\n\n"
         "Return only JSON, nothing else."
     )
     payload = {

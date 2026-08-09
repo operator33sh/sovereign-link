@@ -42,8 +42,9 @@ Each insight block uses this exact structure:
 
 ```
 - Timestamp: [ISO Date]
-- Narrative: [1-3 sentences: trigger, user experience, and reasoning process that led to the insight]
+- Narrative: [1-3 sentences: trigger, experience, reasoning — may reference [[previous logs]]]
 - Core Insight: [one sentence: the conclusion or breakthrough]
+- Relation: [Evolution of [[X]] | Extension of [[X]] | Contradiction of [[X]] | —]
 - Emotional/Psychological State: [e.g. Vulnerable, Analytical, Transgressive, Integrative]
 - Related Tags: [#shadowwork #Sovereign #AI_Architecture]
 - Connected Nodes: [[wikilink to related log]]
@@ -106,6 +107,8 @@ def format_memory_note(
         lines.append(f"- Timestamp: {insight.get('timestamp', today)} {time_tag}")
         lines.append(f"- Narrative: {insight.get('narrative', '')}")
         lines.append(f"- Core Insight: {insight.get('core_insight', '')}")
+        relation = insight.get("relation_type") or ""
+        lines.append(f"- Relation: {relation if relation else '—'}")
         lines.append(f"- Emotional/Psychological State: {insight.get('emotional_state', 'Unknown')}")
         lines.append(f"- Related Tags: {tags_str}")
         lines.append(f"- Connected Nodes: {nodes_str}")
@@ -164,8 +167,15 @@ def run_memory_pipeline(transcript: str) -> dict:
     from tools import write_vault, sync_vault
     import vector
 
-    # Step 1: Extract High-Value Insights via LLM
-    extracted = llm.extract_memory_insights(transcript)
+    # Step 1a: Pre-search — find related prior memory logs for associative linking
+    prior_memory = vector.search_vault_semantic(
+        transcript[:600], n_results=3, path_prefix=f"{MEMORY_DIR}/"
+    )
+    if prior_memory and ("leeg" in prior_memory or "Geen" in prior_memory):
+        prior_memory = ""
+
+    # Step 1b: Extract High-Value Insights via LLM, passing prior context
+    extracted = llm.extract_memory_insights(transcript, prior_memory=prior_memory)
     topic = extracted.get("topic", "Unnamed_Insight")
     insights = extracted.get("insights", [])
     if not insights:
@@ -173,6 +183,7 @@ def run_memory_pipeline(transcript: str) -> dict:
             "timestamp": datetime.now().strftime("%Y-%m-%d"),
             "narrative": "No meaningful conversation content was found to extract a narrative from.",
             "core_insight": "No insights extracted from this session.",
+            "relation_type": None,
             "emotional_state": "Neutral",
             "tags": ["#sovereign"],
             "connected_nodes": [],
