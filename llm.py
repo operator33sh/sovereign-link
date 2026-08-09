@@ -14,6 +14,17 @@ VISION_MODEL = os.environ.get("VISION_MODEL", MODEL)
 
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "small")
 
+_PERSONA_PATH = os.path.join(os.path.dirname(__file__), "luna_persona.md")
+
+def _load_persona() -> str:
+    try:
+        with open(_PERSONA_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+_PERSONA = _load_persona()
+
 _whisper_model = None
 
 def _get_whisper():
@@ -24,8 +35,7 @@ def _get_whisper():
     return _whisper_model
 
 
-SYSTEM_PROMPT = os.environ.get(
-    "SYSTEM_PROMPT",
+_VAULT_PROMPT = (
     "You are a personal assistant deeply integrated with the user's fractalisme vault — a Sovereign Memory system.\n\n"
 
     "## Vault as Single Source of Truth\n"
@@ -60,6 +70,11 @@ SYSTEM_PROMPT = os.environ.get(
     "When the user shares a URL or asks what a website contains, use analyze_website to fetch and extract its content. "
     "After fetching a page, summarize the key points before offering to save them to the vault. "
     "Be concise and direct.",
+)
+
+SYSTEM_PROMPT = os.environ.get(
+    "SYSTEM_PROMPT",
+    (_PERSONA + "\n\n---\n\n" + _VAULT_PROMPT) if _PERSONA else _VAULT_PROMPT,
 )
 
 _client = httpx.Client(
