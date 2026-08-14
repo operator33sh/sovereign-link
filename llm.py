@@ -65,6 +65,18 @@ _VAULT_PROMPT = (
     "include the current month tag in your search_vault_semantic query — e.g. '#2026-08 zelfzorg'. "
     "This prevents old, unrelated entries from ranking above recent ones.\n\n"
 
+    "## Background Agents\n"
+    "You can spawn autonomous background agents to handle complex or time-consuming tasks. "
+    "Agents run independently in a separate thread — they do NOT block this conversation. "
+    "Use `spawn_agent` when a task involves multiple steps, deep research, or generating large reports. "
+    "It returns immediately with an `agent_id`. The agent then works on its own using the full tool set.\n"
+    "- `spawn_agent(goal, agent_name)` — start an agent; returns agent_id immediately\n"
+    "- `get_agent_status(agent_id)` — check progress or retrieve results when done\n"
+    "- `list_agents()` — overview of all agents this session\n\n"
+    "Good uses for agents: vault-wide analysis, multi-URL research, generating structured reports, "
+    "tasks that would take many conversation turns to complete manually. "
+    "Always tell the user you've started an agent and give them the agent_id so they can ask for status later.\n\n"
+
     "## General Behaviour\n"
     "Use the provided tools to read, write, search, and sync vault files as requested. "
     "When the user shares a URL or asks what a website contains, use analyze_website to fetch and extract its content. "
@@ -236,6 +248,68 @@ def transcribe_audio(file_path: str) -> str:
     model = _get_whisper()
     segments, _ = model.transcribe(file_path)
     return " ".join(seg.text for seg in segments).strip()
+
+
+_AUTONOMOUS_TRIGGER = (
+    "SYSTEM EVENT: A background agent has just completed its task. "
+    "The completion notification with the vault report path has been injected above. "
+    "You must now: (1) call read_vault with the exact path from the notification, "
+    "(2) synthesize the key findings in your own voice, "
+    "(3) present them to the user proactively and concisely. "
+    "The user expects to hear from you when agents finish — always respond."
+)
+
+
+def run_triggered() -> str:
+    """
+    Autonomous LLM call triggered by agent completion.
+
+    The trigger prompt is appended temporarily to the message list but never
+    stored in context — so it doesn't appear as a user message in history.
+    Only the assistant's response is stored (if non-silent).
+    Returns the response text, or "" if Luna chose SILENT or produced nothing.
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    system_with_time = (
+        f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. "
+        "This is context only — do not act on it."
+    )
+    messages = (
+        [{"role": "system", "content": system_with_time}]
+        + context.get_history()
+        + [{"role": "user", "content": _AUTONOMOUS_TRIGGER}]
+    )
+
+    for _ in range(5):
+        data = _chat(messages)
+        choice = data["choices"][0]
+        message = choice["message"]
+        finish_reason = choice.get("finish_reason", "stop")
+
+        if finish_reason == "tool_calls" or message.get("tool_calls"):
+            tool_calls = message["tool_calls"]
+            context.add_assistant_with_tool_calls(tool_calls)
+            messages.append({"role": "assistant", "tool_calls": tool_calls})
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
+                handler = TOOL_HANDLERS.get(fn_name)
+                result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
+                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result}
+                context.add_tool_result(tc["id"], result)
+                messages.append(tool_msg)
+            continue
+
+        text = (message.get("content") or "").strip()
+        if not text:
+            return ""
+        context.add_message("assistant", text)
+        return text
+
+    return ""
 
 
 def run(user_message: str) -> str:

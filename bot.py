@@ -16,6 +16,8 @@ import llm
 import vector
 from tools import write_vault, sync_vault, generate_time_tag
 from memory_manager import run_memory_pipeline
+from agent import run_system_check
+import chat_bridge
 
 
 logging.basicConfig(
@@ -347,6 +349,15 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("Kon geen tekst uit het audiobericht halen.")
             return
 
+        _loop = asyncio.get_event_loop()
+        chat_bridge.set_sender(
+            lambda text: asyncio.run_coroutine_threadsafe(
+                update.message.reply_text(text[:4096]), _loop
+            )
+        )
+        chat_bridge.set_context_injector(lambda text: context.add_message("user", text))
+        chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
+
         reply = await asyncio.to_thread(llm.run, transcription)
 
         typing_task.cancel()
@@ -361,6 +372,24 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Audio transcription error")
         typing_task.cancel()
         await update.message.reply_text(f"Fout bij verwerken audiobericht: {e}")
+
+
+def _make_llm_trigger_fn() -> "Callable[[], None]":
+    """
+    Create a sync no-arg callable that triggers an autonomous LLM call
+    and pushes the result to Telegram via the registered chat sender.
+    Called from daemon agent threads, so must be fully synchronous.
+    """
+    def _trigger() -> None:
+        try:
+            response = llm.run_triggered()
+            if response:
+                sender = chat_bridge.get_sender()
+                if sender:
+                    sender(response[:4096])
+        except Exception:
+            logger.exception("Autonomous LLM trigger failed")
+    return _trigger
 
 
 async def _auto_memory_background(update: Update, transcript: str) -> None:
@@ -402,6 +431,16 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
                 pass
             await asyncio.sleep(4)
 
+    # Register sender + context injector so agents can report back to chat and Luna's context
+    _loop = asyncio.get_event_loop()
+    chat_bridge.set_sender(
+        lambda text: asyncio.run_coroutine_threadsafe(
+            update.message.reply_text(text[:4096]), _loop
+        )
+    )
+    chat_bridge.set_context_injector(lambda text: context.add_message("user", text))
+    chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
+
     typing_task = asyncio.create_task(keep_typing())
     try:
         reply = await asyncio.to_thread(llm.run, user_text)
@@ -415,6 +454,68 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     _save_session_draft()
 
 
+async def _run_syscheck_background(update: Update) -> None:
+    """Fire-and-forget: run the system check agent and notify the user."""
+    try:
+        result = await asyncio.to_thread(run_system_check)
+        summary = result[:3800] if len(result) > 3800 else result
+        await update.message.reply_text(
+            f"System check complete:\n\n{summary}",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        logger.exception("System check agent error")
+        await update.message.reply_text("System check failed. Check the vault agent log.")
+
+
+async def cmd_agent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Spawn a background agent with a custom goal: /agent <goal description>"""
+    if not _is_authorized(update):
+        return
+
+    goal = " ".join(ctx.args or []).strip()
+    if not goal:
+        await update.message.reply_text(
+            "Usage: `/agent <goal description>`\n\nExample: `/agent Analyseer de vault en schrijf een overzicht van alle inzichten over zelfzorg`",
+            parse_mode="Markdown",
+        )
+        return
+
+    agent_name = f"Agent_{datetime.now().strftime('%H%M%S')}"
+    await update.message.reply_text(
+        f"Agent `{agent_name}` gestart.\nDoel: _{goal}_\n\nLuna deelt de bevindingen zodra het klaar is.",
+        parse_mode="Markdown",
+    )
+
+    # Register callbacks so Luna can synthesize and report when the agent completes
+    _loop = asyncio.get_event_loop()
+    chat_bridge.set_sender(
+        lambda text: asyncio.run_coroutine_threadsafe(
+            update.message.reply_text(text[:4096]), _loop
+        )
+    )
+    chat_bridge.set_context_injector(lambda text: context.add_message("user", text))
+    chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
+
+    from agent import launch_agent
+    launch_agent(
+        goal, agent_name,
+        context_injector=chat_bridge.get_context_injector(),
+        llm_trigger=chat_bridge.get_llm_trigger(),
+    )
+
+
+async def cmd_syscheck(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run the built-in system health check agent."""
+    if not _is_authorized(update):
+        return
+
+    await update.message.reply_text(
+        "System Check Agent gestart. Ik scan tools, test LLM-redenering en vault-connectiviteit. Even geduld…",
+    )
+    asyncio.create_task(_run_syscheck_background(update))
+
+
 async def _set_commands(app: Application) -> None:
     await app.bot.set_my_commands([
         BotCommand("start", "Check if the bot is online"),
@@ -422,6 +523,8 @@ async def _set_commands(app: Application) -> None:
         BotCommand("vault", "Save last 5 exchanges as a vault note"),
         BotCommand("memory", "Extract and save sovereign memory log from conversation"),
         BotCommand("whisper", "Generate a tweet from a random vault insight"),
+        BotCommand("agent", "Spawn a background agent with a custom goal"),
+        BotCommand("syscheck", "Run system health check agent"),
     ])
 
 
@@ -454,6 +557,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("vault", cmd_vault))
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("whisper", cmd_whisper))
+    app.add_handler(CommandHandler("agent", cmd_agent))
+    app.add_handler(CommandHandler("syscheck", cmd_syscheck))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

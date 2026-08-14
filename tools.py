@@ -201,6 +201,77 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "spawn_agent",
+            "description": (
+                "Spawn an autonomous background agent to work on a goal independently. "
+                "The agent runs in a separate thread — it does NOT block Luna's conversation. "
+                "It has access to all tools (read/write vault, web analysis, search) and uses "
+                "its own Observe → Reason → Act → Evaluate loop until the goal is achieved. "
+                "Returns immediately with an agent_id. Use get_agent_status to check progress. "
+                "Good for: deep research, multi-step analysis, generating structured reports, "
+                "tasks that take too long for a single conversation turn."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "Clear, detailed description of what the agent should accomplish, including any deliverables (files to write, etc.).",
+                    },
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Short descriptive name for this agent, e.g. 'ResearchAgent', 'GrowthAgent', 'AnalysisAgent'.",
+                    },
+                    "report_to_chat": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, the agent sends a summary directly to this chat when it finishes. "
+                            "Use true when the user will want to hear the result soon. "
+                            "Use false for silent background processing (heavy/long tasks). "
+                            "Default: false."
+                        ),
+                    },
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_status",
+            "description": (
+                "Check the current status of a background agent. "
+                "Returns: status (running/completed/failed/timeout), result if done, and log file path. "
+                "Call this when the user asks about an agent's progress or results."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The agent ID returned by spawn_agent.",
+                    }
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_agents",
+            "description": "List all background agents spawned this session with their status (running/completed/failed). Use this to give an overview of active and finished agents.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_vault_semantic",
             "description": (
                 "Semantic search across the entire fractalisme vault using vector embeddings. "
@@ -234,4 +305,26 @@ TOOL_HANDLERS = {
     "sync_vault": lambda args: sync_vault(),
     "search_vault_semantic": lambda args: _search_vault_semantic(args["query"]),
     "analyze_website": lambda args: analyze_website(args["url"]),
+    # Agent management — imported lazily to avoid circular imports
+    "spawn_agent": lambda args: _agent_spawn(args["goal"], args.get("agent_name", "Agent"), args.get("report_to_chat", False)),
+    "get_agent_status": lambda args: _agent_status(args["agent_id"]),
+    "list_agents": lambda args: _agent_list(),
 }
+
+
+def _agent_spawn(goal: str, agent_name: str, report_to_chat: bool = False) -> str:
+    from agent import launch_agent
+    from chat_bridge import get_context_injector, get_llm_trigger
+    injector = get_context_injector() if report_to_chat else None
+    trigger = get_llm_trigger() if report_to_chat else None
+    return launch_agent(goal, agent_name, context_injector=injector, llm_trigger=trigger)
+
+
+def _agent_status(agent_id: str) -> str:
+    from agent import get_agent_status
+    return get_agent_status(agent_id)
+
+
+def _agent_list() -> str:
+    from agent import list_agents
+    return list_agents()
