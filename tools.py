@@ -125,6 +125,55 @@ def analyze_website(url: str) -> str:
     return extracted
 
 
+def write_blackboard(project_id: str, fragment: str, label: str = "") -> str:
+    """Write an insight fragment to the shared blackboard for a swarm project."""
+    ts = datetime.now().strftime("%H%M%S")
+    file_name = f"agents/blackboard/{project_id}/{label or 'fragment'}_{ts}.md"
+    return write_vault(file_name, fragment)
+
+
+def read_blackboard(project_id: str) -> str:
+    """Read all fragments posted to the blackboard by all peers."""
+    board_dir = os.path.join(VAULT_PATH, "agents", "blackboard", project_id)
+    if not os.path.isdir(board_dir):
+        return f"Blackboard '{project_id}' is empty or does not exist."
+    fragments = []
+    for fname in sorted(os.listdir(board_dir)):
+        if fname.endswith(".md"):
+            content = read_vault(f"agents/blackboard/{project_id}/{fname}")
+            fragments.append(f"### {fname}\n{content}")
+    return "\n\n---\n\n".join(fragments) if fragments else "Blackboard is empty."
+
+
+def send_signal(recipient: str, message: str, sender: str = "unknown") -> str:
+    """Send an async signal to another agent via the vault."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f"agents/signals/{recipient}_{ts}.md"
+    content = f"**From:** {sender}  \n**To:** {recipient}  \n**Time:** {ts}\n\n{message}"
+    return write_vault(file_name, content)
+
+
+def read_signals(agent_name: str) -> str:
+    """Read all pending signals addressed to this agent."""
+    sig_dir = os.path.join(VAULT_PATH, "agents", "signals")
+    if not os.path.isdir(sig_dir):
+        return "No signals."
+    signals = []
+    for fname in sorted(os.listdir(sig_dir)):
+        if fname.startswith(agent_name + "_") and fname.endswith(".md"):
+            signals.append(read_vault(f"agents/signals/{fname}"))
+    return "\n\n---\n\n".join(signals) if signals else f"No signals for {agent_name}."
+
+
+def spawn_peer(goal: str, role: str, project_id: str, swarm_id: str) -> str:
+    """Spawn a peer agent in the same swarm (horizontal, not hierarchical)."""
+    from agent import _get_swarm_coordinator
+    coordinator = _get_swarm_coordinator(swarm_id)
+    if coordinator is None:
+        return f"Error: swarm '{swarm_id}' not found."
+    return coordinator.add_peer(goal=goal, role=role)
+
+
 TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -272,6 +321,125 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "write_blackboard",
+            "description": (
+                "Write an insight fragment to the shared blackboard for a swarm project. "
+                "Use this to post observations, hypotheses, or conclusions so peer agents can read them. "
+                "All agents in the same swarm share a single blackboard per project_id."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The swarm project identifier."},
+                    "fragment": {"type": "string", "description": "The insight or finding to post."},
+                    "label": {"type": "string", "description": "Optional short label for the fragment file (e.g. 'hypothesis', 'finding')."},
+                },
+                "required": ["project_id", "fragment"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_blackboard",
+            "description": (
+                "Read all fragments posted to the shared blackboard by all peers in a swarm. "
+                "Call this periodically to observe what peers have discovered and adjust your research accordingly."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The swarm project identifier."},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_signal",
+            "description": "Send an async direct message to a specific peer agent via the vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "recipient": {"type": "string", "description": "The agent_name of the recipient peer."},
+                    "message": {"type": "string", "description": "The message content to send."},
+                    "sender": {"type": "string", "description": "Your own agent_name as sender."},
+                },
+                "required": ["recipient", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_signals",
+            "description": "Read all pending signals (direct messages from peers) addressed to you.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Your own agent_name to read signals for."},
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_peer",
+            "description": (
+                "Spawn a new peer agent in the same swarm (horizontal, not hierarchical). "
+                "Use when you need a complementary perspective — e.g. a 'Skeptic' to challenge your hypothesis. "
+                "Subject to the swarm's maximum size limit."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "What this peer should investigate."},
+                    "role": {"type": "string", "description": "Role label for the peer (e.g. 'Skeptic', 'FactChecker')."},
+                    "project_id": {"type": "string", "description": "The swarm project identifier."},
+                    "swarm_id": {"type": "string", "description": "The swarm_id this peer should join."},
+                },
+                "required": ["goal", "role", "project_id", "swarm_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_swarm",
+            "description": (
+                "Start a rhizomatic peer swarm where agents collaborate on a shared Blackboard. "
+                "Peers run independently, observe each other's findings, and may spawn additional peers. "
+                "A SynthesisAgent spawns automatically when all peers complete to distill the final result. "
+                "Returns swarm_id immediately — use list_agents() to monitor progress. "
+                "Good for: complex multi-perspective research, vault-wide analysis, topics requiring debate."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "The overarching goal for the swarm."},
+                    "project_id": {"type": "string", "description": "Short identifier for this project's blackboard (no spaces, e.g. 'ai_analyse')."},
+                    "roles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of peer roles to spawn. Default: ['Researcher', 'Skeptic', 'Synthesist'].",
+                    },
+                    "swarm_size": {"type": "integer", "description": "Max number of peers (including auto-spawned). Default: 5."},
+                    "report_to_chat": {
+                        "type": "boolean",
+                        "description": "If true, Luna is notified when the synthesis completes. Default: false.",
+                    },
+                },
+                "required": ["goal", "project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_vault_semantic",
             "description": (
                 "Semantic search across the entire fractalisme vault using vector embeddings. "
@@ -309,6 +477,13 @@ TOOL_HANDLERS = {
     "spawn_agent": lambda args: _agent_spawn(args["goal"], args.get("agent_name", "Agent"), args.get("report_to_chat", False)),
     "get_agent_status": lambda args: _agent_status(args["agent_id"]),
     "list_agents": lambda args: _agent_list(),
+    # Swarm tools
+    "write_blackboard": lambda args: write_blackboard(args["project_id"], args["fragment"], args.get("label", "")),
+    "read_blackboard": lambda args: read_blackboard(args["project_id"]),
+    "send_signal": lambda args: send_signal(args["recipient"], args["message"], args.get("sender", "unknown")),
+    "read_signals": lambda args: read_signals(args["agent_name"]),
+    "spawn_peer": lambda args: spawn_peer(args["goal"], args["role"], args["project_id"], args["swarm_id"]),
+    "spawn_swarm": lambda args: _swarm_spawn(args["goal"], args["project_id"], args.get("roles"), args.get("swarm_size", 5), args.get("report_to_chat", False)),
 }
 
 
@@ -328,3 +503,18 @@ def _agent_status(agent_id: str) -> str:
 def _agent_list() -> str:
     from agent import list_agents
     return list_agents()
+
+
+def _swarm_spawn(
+    goal: str, project_id: str,
+    roles: list | None, swarm_size: int, report_to_chat: bool = False,
+) -> str:
+    from agent import launch_swarm
+    from chat_bridge import get_context_injector, get_llm_trigger
+    injector = get_context_injector() if report_to_chat else None
+    trigger = get_llm_trigger() if report_to_chat else None
+    return launch_swarm(
+        goal=goal, project_id=project_id,
+        roles=roles, swarm_size=swarm_size,
+        context_injector=injector, llm_trigger=trigger,
+    )

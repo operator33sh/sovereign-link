@@ -11,11 +11,13 @@ import json
 import logging
 import os
 import threading
+import time
 from datetime import datetime
 
 # Configurable via environment variables
 _AGENT_MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", 50))
 _AGENT_LLM_TIMEOUT = float(os.environ.get("AGENT_LLM_TIMEOUT", 180.0))
+_AGENT_SWARM_SIZE = int(os.environ.get("AGENT_SWARM_SIZE", 5))
 
 from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, write_vault, sync_vault
 
@@ -35,7 +37,11 @@ _registry: dict[str, dict] = {}
 #   "log_file": str,
 #   "started_at": str (ISO),
 #   "finished_at": str | None,
+#   "swarm_id": str | None,
+#   "role": str | None,
 # }
+
+_swarm_registry: dict[str, "SwarmCoordinator"] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +67,21 @@ _EVAL_PROMPT = (
     "If it is fully achieved (all files written, all checks done), respond with "
     "'GOAL_COMPLETE: <summary>'. Otherwise, state what still needs to be done and take the next action."
 )
+
+_SWARM_SYSTEM_PROMPT_TEMPLATE = _AGENT_SYSTEM_PROMPT + """
+
+## Swarm Protocol
+You are part of a peer swarm working on project '{project_id}' as a '{role}'.
+- Use `write_blackboard(project_id, fragment, label)` to post insights for peers.
+- Use `read_blackboard(project_id)` periodically to observe peer findings and adjust your course.
+  If you notice a contradiction or gap, pivot your research to address it ('constructive interference').
+- Use `send_signal(recipient, message, sender)` to notify a specific peer directly.
+- Use `read_signals(agent_name)` to check for incoming peer messages.
+- Use `spawn_peer(goal, role, project_id, swarm_id)` to add a complementary peer
+  (e.g. a 'Skeptic' if you need your hypothesis challenged). Max swarm size: {swarm_size}.
+- You do NOT manage other agents — you collaborate as equals.
+- When done, post your final conclusion to the blackboard and declare GOAL_COMPLETE.
+"""
 
 
 class BackgroundAgent:
@@ -294,10 +315,183 @@ class BackgroundAgent:
 
 
 # ------------------------------------------------------------------
+# Swarm Agent — peer-aware subclass of BackgroundAgent
+# ------------------------------------------------------------------
+
+class SwarmAgent(BackgroundAgent):
+    """Peer agent that reads/writes a shared Blackboard and can spawn sibling peers."""
+
+    def __init__(
+        self,
+        goal: str,
+        agent_name: str,
+        project_id: str,
+        role: str,
+        swarm_id: str,
+        swarm_size: int = _AGENT_SWARM_SIZE,
+        max_iterations: int = _AGENT_MAX_ITERATIONS,
+    ):
+        super().__init__(goal=goal, agent_name=agent_name, max_iterations=max_iterations)
+        self.project_id = project_id
+        self.role = role
+        self.swarm_id = swarm_id
+        self.swarm_size = swarm_size
+        self._system_prompt = _SWARM_SYSTEM_PROMPT_TEMPLATE.format(
+            project_id=project_id,
+            role=role,
+            swarm_size=swarm_size,
+        )
+
+    def run(self) -> str:
+        """Override to use swarm-aware system prompt."""
+        self._messages = [
+            {"role": "system", "content": self._system_prompt},
+            {"role": "user", "content": f"Goal: {self.goal}"},
+        ]
+        self._append_log("INIT", f"[{self.role}] Goal accepted: **{self.goal}**")
+        self._append_log("SWARM", f"Project: `{self.project_id}` | Swarm: `{self.swarm_id}`")
+
+        for iteration in range(1, self.max_iterations + 1):
+            self._append_log(
+                f"ITERATION {iteration} — OBSERVE / REASON",
+                "Calling LLM to determine next action…",
+            )
+
+            try:
+                data = self._llm_call()
+            except Exception as e:
+                msg = f"LLM call failed: {e}"
+                self._append_log("ERROR", msg)
+                self._finalize("FAILED")
+                return f"Agent '{self.agent_name}' failed: {e}"
+
+            choice = data["choices"][0]
+            message = choice["message"]
+            finish_reason = choice.get("finish_reason", "stop")
+
+            if finish_reason == "tool_calls" or message.get("tool_calls"):
+                tool_calls = message["tool_calls"]
+                self._messages.append({"role": "assistant", "tool_calls": tool_calls})
+                log_entries = self._execute_tool_calls(tool_calls)
+                self._append_log(f"ITERATION {iteration} — ACT", "\n\n".join(log_entries))
+                continue
+
+            text = message.get("content") or ""
+            self._messages.append({"role": "assistant", "content": text})
+
+            if "GOAL_COMPLETE:" in text:
+                self._append_log("COMPLETE", text)
+                self._finalize("SUCCESS")
+                sync_vault()
+                self._notify_chat(text)
+                return text
+
+            self._append_log(f"ITERATION {iteration} — EVALUATE", text)
+            self._messages.append({"role": "user", "content": _EVAL_PROMPT})
+
+        self._append_log(
+            "TIMEOUT",
+            f"Reached maximum of {self.max_iterations} iterations without GOAL_COMPLETE.",
+        )
+        self._finalize("TIMEOUT")
+        sync_vault()
+        result = (
+            f"Agent '{self.agent_name}' reached max iterations ({self.max_iterations}). "
+            f"Partial log saved to `{self.log_file}`."
+        )
+        self._notify_chat(result)
+        return result
+
+
+# ------------------------------------------------------------------
+# Swarm Coordinator — manages a peer swarm and auto-spawns SynthesisAgent
+# ------------------------------------------------------------------
+
+class SwarmCoordinator:
+    """Manages a set of peer SwarmAgents on a shared Blackboard."""
+
+    def __init__(self, project_id: str, swarm_size: int = _AGENT_SWARM_SIZE):
+        self.project_id = project_id
+        self.swarm_size = swarm_size
+        self._lock = threading.Lock()
+        self._peers: dict[str, dict] = {}  # agent_id → {thread, agent, role}
+        self._swarm_id = f"swarm_{project_id}_{datetime.now().strftime('%H%M%S')}"
+        self.context_injector = None
+        self.llm_trigger = None
+
+    def launch(self, initial_peers: list[dict]) -> str:
+        """Start all initial peers and the completion monitor. Returns swarm_id."""
+        for p in initial_peers:
+            self.add_peer(p["goal"], p["role"])
+        monitor = threading.Thread(target=self._monitor, daemon=True, name=f"{self._swarm_id}_monitor")
+        monitor.start()
+        return self._swarm_id
+
+    def add_peer(self, goal: str, role: str) -> str:
+        with self._lock:
+            if len(self._peers) >= self.swarm_size:
+                return f"Swarm size limit ({self.swarm_size}) reached — peer not spawned."
+            agent_name = f"{role}_{datetime.now().strftime('%H%M%S')}"
+
+        agent = SwarmAgent(
+            goal=goal,
+            agent_name=agent_name,
+            project_id=self.project_id,
+            role=role,
+            swarm_id=self._swarm_id,
+            swarm_size=self.swarm_size,
+        )
+        agent_id = agent_name
+        _register(agent_id, agent_name, goal, agent.log_file,
+                  swarm_id=self._swarm_id, role=role)
+
+        def _run():
+            result = agent.run()
+            status = "completed" if "GOAL_COMPLETE:" in result else "timeout"
+            _update_registry(agent_id, status, result)
+
+        t = threading.Thread(target=_run, daemon=True, name=agent_id)
+        with self._lock:
+            self._peers[agent_id] = {"thread": t, "agent": agent, "role": role}
+        t.start()
+        return f"Peer '{agent_name}' ({role}) spawned in swarm '{self._swarm_id}'."
+
+    def _monitor(self):
+        """Poll until all peers finish, then spawn SynthesisAgent."""
+        while True:
+            time.sleep(10)
+            with self._lock:
+                all_done = all(not p["thread"].is_alive() for p in self._peers.values())
+            if all_done:
+                self._synthesize()
+                break
+
+    def _synthesize(self):
+        synthesis_goal = (
+            f"Read the full blackboard for project '{self.project_id}' using "
+            f"read_blackboard with project_id='{self.project_id}'. "
+            f"Synthesize all peer findings into a coherent conclusion. "
+            f"Resolve contradictions, identify emergent patterns, and write the final synthesis to "
+            f"'agents/reports/{self.project_id}_synthesis.md'. "
+            f"Then declare GOAL_COMPLETE."
+        )
+        agent = BackgroundAgent(
+            goal=synthesis_goal,
+            agent_name="SynthesisAgent",
+            context_injector=self.context_injector,
+            llm_trigger=self.llm_trigger,
+        )
+        agent.run()
+
+
+# ------------------------------------------------------------------
 # Registry helpers
 # ------------------------------------------------------------------
 
-def _register(agent_id: str, name: str, goal: str, log_file: str) -> None:
+def _register(
+    agent_id: str, name: str, goal: str, log_file: str,
+    swarm_id: str | None = None, role: str | None = None,
+) -> None:
     with _registry_lock:
         _registry[agent_id] = {
             "id": agent_id,
@@ -308,6 +502,8 @@ def _register(agent_id: str, name: str, goal: str, log_file: str) -> None:
             "log_file": log_file,
             "started_at": datetime.now().isoformat(),
             "finished_at": None,
+            "swarm_id": swarm_id,
+            "role": role,
         }
 
 
@@ -382,7 +578,7 @@ def get_agent_status(agent_id: str) -> str:
 
 
 def list_agents() -> str:
-    """Return a summary of all agents launched this session."""
+    """Return a summary of all agents launched this session, grouped by swarm."""
     with _registry_lock:
         entries = list(_registry.values())
 
@@ -390,12 +586,72 @@ def list_agents() -> str:
         return "No agents have been launched this session."
 
     lines = ["**Background Agents — this session:**\n"]
+
+    swarms: dict[str, list] = {}
+    standalone: list = []
     for e in entries:
+        sid = e.get("swarm_id")
+        if sid:
+            swarms.setdefault(sid, []).append(e)
+        else:
+            standalone.append(e)
+
+    for e in standalone:
         lines.append(
             f"- `{e['id']}` — **{e['status']}** — {e['goal'][:80]}"
             + ("…" if len(e["goal"]) > 80 else "")
         )
+
+    for sid, peers in swarms.items():
+        lines.append(f"\n**Swarm `{sid}`:**")
+        for e in peers:
+            role = e.get("role", "")
+            role_label = f" [{role}]" if role else ""
+            lines.append(
+                f"  - `{e['id']}`{role_label} — **{e['status']}** — {e['goal'][:70]}"
+                + ("…" if len(e["goal"]) > 70 else "")
+            )
+
     return "\n".join(lines)
+
+
+def _get_swarm_coordinator(swarm_id: str) -> "SwarmCoordinator | None":
+    return _swarm_registry.get(swarm_id)
+
+
+def launch_swarm(
+    goal: str,
+    project_id: str,
+    roles: list[str] | None = None,
+    swarm_size: int = _AGENT_SWARM_SIZE,
+    context_injector=None,
+    llm_trigger=None,
+) -> str:
+    """
+    Start a rhizomatic peer swarm on a shared Blackboard.
+    Returns swarm_id immediately. SynthesisAgent spawns automatically when all peers complete.
+
+    roles: list of role names for initial peers, e.g. ["Researcher", "Skeptic", "Synthesist"]
+    Default: ["Researcher", "Skeptic", "Synthesist"]
+    """
+    if roles is None:
+        roles = ["Researcher", "Skeptic", "Synthesist"]
+
+    coordinator = SwarmCoordinator(project_id=project_id, swarm_size=swarm_size)
+    coordinator.context_injector = context_injector
+    coordinator.llm_trigger = llm_trigger
+
+    _swarm_registry[coordinator._swarm_id] = coordinator
+
+    initial_peers = [{"goal": f"[{role}] {goal}", "role": role} for role in roles]
+    swarm_id = coordinator.launch(initial_peers)
+
+    return (
+        f"Swarm `{swarm_id}` started with {len(roles)} peer(s): {', '.join(roles)}.\n"
+        f"Blackboard: `agents/blackboard/{project_id}/`\n"
+        f"SynthesisAgent will spawn automatically when all peers complete.\n"
+        f"Use `list_agents()` to check progress."
+    )
 
 
 # ------------------------------------------------------------------
