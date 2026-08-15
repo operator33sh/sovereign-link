@@ -27,11 +27,16 @@ def _now_utc() -> datetime:
 
 
 def _parse_dt(s: str) -> datetime:
-    """Parse ISO 8601; treat naive datetimes as local time, return UTC."""
+    """Parse ISO 8601 string and return UTC datetime.
+
+    Naive datetimes (no offset) are interpreted as the user's configured
+    timezone (from timezone_manager), NOT the server's system timezone.
+    Explicit offsets and the 'Z' suffix are always honoured as-is.
+    """
     dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        # Assume local time
-        dt = dt.astimezone(timezone.utc)
+        from timezone_manager import get_zoneinfo
+        dt = dt.replace(tzinfo=get_zoneinfo())
     return dt.astimezone(timezone.utc)
 
 

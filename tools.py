@@ -212,6 +212,16 @@ def read_signals(agent_name: str) -> str:
     return "\n\n---\n\n".join(signals) if signals else f"No signals for {agent_name}."
 
 
+def set_timezone(timezone_string: str) -> str:
+    from timezone_manager import set_timezone as _set_tz
+    return _set_tz(timezone_string)
+
+
+def get_timezone() -> str:
+    from timezone_manager import get_timezone_info
+    return get_timezone_info()
+
+
 def write_notification(
     content: str,
     agent_id: str = "system",
@@ -603,6 +613,35 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "set_timezone",
+            "description": (
+                "Set the user's local timezone so that scheduled tasks use the correct local time. "
+                "Must be a valid IANA timezone string (e.g. 'Europe/Amsterdam', 'America/New_York'). "
+                "Call this once when setting up, or when the user changes location."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timezone_string": {
+                        "type": "string",
+                        "description": "IANA timezone name, e.g. 'Europe/Amsterdam'.",
+                    },
+                },
+                "required": ["timezone_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_timezone",
+            "description": "Show the currently configured user timezone and local time.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_notification",
             "description": (
                 "Push a notification into the persistent queue so the user sees it later. "
@@ -945,6 +984,9 @@ TOOL_HANDLERS = {
     "read_signals": lambda args: read_signals(args["agent_name"]),
     "spawn_peer": lambda args: spawn_peer(args["goal"], args["role"], args["project_id"], args["swarm_id"]),
     "spawn_swarm": lambda args: _swarm_spawn(args["goal"], args["project_id"], args.get("roles"), args.get("swarm_size", 5), args.get("report_to_chat", False)),
+    # Timezone
+    "set_timezone": lambda args: set_timezone(args["timezone_string"]),
+    "get_timezone": lambda args: get_timezone(),
     # Notifications
     "write_notification": lambda args: write_notification(
         args["content"],
