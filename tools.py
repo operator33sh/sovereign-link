@@ -253,6 +253,16 @@ def cancel_scheduled_task(task_id: str) -> str:
     return _scheduler.cancel_task(task_id)
 
 
+def set_sleep_mode(sleeping: bool) -> str:
+    from proactive import user_status
+    return user_status.set_sleep_mode(sleeping)
+
+
+def get_user_status() -> str:
+    from proactive import user_status
+    return user_status.get_status_summary()
+
+
 def spawn_peer(goal: str, role: str, project_id: str, swarm_id: str) -> str:
     """Spawn a peer agent in the same swarm (horizontal, not hierarchical)."""
     from agent import _get_swarm_coordinator
@@ -765,6 +775,42 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "set_sleep_mode",
+            "description": (
+                "Enable or disable sleep mode. In sleep mode, only high-priority notifications "
+                "are pushed proactively; medium and low notifications are held until the user returns. "
+                "Sleep mode is automatically cleared when the user sends any message."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sleeping": {
+                        "type": "boolean",
+                        "description": "True to enable sleep mode, false to disable it.",
+                    },
+                },
+                "required": ["sleeping"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_user_status",
+            "description": (
+                "Return the current user status: whether sleep mode is active and when the user was last active. "
+                "Use this before deciding whether to push a notification or hold it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_swarm",
             "description": (
                 "Start a rhizomatic peer swarm where agents collaborate on a shared Blackboard. "
@@ -1000,6 +1046,9 @@ TOOL_HANDLERS = {
     "schedule_task": lambda args: schedule_task(args["execution_time"], args["action"], args["parameters"], args.get("description", "")),
     "list_scheduled_tasks": lambda args: list_scheduled_tasks(args.get("include_done", False)),
     "cancel_scheduled_task": lambda args: cancel_scheduled_task(args["task_id"]),
+    # User status / sleep mode
+    "set_sleep_mode": lambda args: set_sleep_mode(args["sleeping"]),
+    "get_user_status": lambda args: get_user_status(),
 }
 
 

@@ -12,6 +12,7 @@ import os
 import threading
 import uuid
 from datetime import datetime, timezone
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ _VALID_CATEGORIES = {"insight", "alert", "system", "wellness", "task"}
 class _NotificationManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._on_write: Callable | None = None  # set by proactive_dispatcher
 
     # ------------------------------------------------------------------
     # Storage
@@ -90,6 +92,14 @@ class _NotificationManager:
             "Notification queued [%s/%s] from %s: %s",
             priority, category, agent_id, content[:80],
         )
+
+        # Signal the proactive dispatcher (if registered) without holding the lock
+        if self._on_write is not None:
+            try:
+                self._on_write()
+            except Exception:
+                logger.exception("NotificationManager: _on_write callback failed")
+
         return f"Notificatie opgeslagen (id=`{entry['id']}`, prioriteit={priority})"
 
     def get_pending(self) -> str:

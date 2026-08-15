@@ -19,6 +19,8 @@ from memory_manager import run_memory_pipeline
 from agent import run_system_check
 import chat_bridge
 from scheduler import scheduler as _scheduler
+from proactive import user_status, proactive_dispatcher
+from notifications import notification_manager
 
 
 logging.basicConfig(
@@ -35,6 +37,10 @@ _message_count = 0
 _messages_since_last_memory = 0
 
 SESSION_DRAFT_PATH = "memory/session_draft.md"
+
+# Stored by handle_message so the proactive dispatcher can push messages
+# even when no active handler is running.
+_proactive_loop: "asyncio.AbstractEventLoop | None" = None
 
 
 def _save_session_draft() -> None:
@@ -409,9 +415,13 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_authorized(update):
         return
 
-    global _message_count, _messages_since_last_memory
+    global _message_count, _messages_since_last_memory, _proactive_loop
     _message_count += 1
     _messages_since_last_memory += 1
+
+    # Track activity so the proactive dispatcher knows the user is awake
+    user_status.update_activity(update.effective_chat.id)
+    _proactive_loop = asyncio.get_event_loop()
     if _message_count % AUTO_MEMORY_EVERY == 0:
         history = context.get_history()
         transcript = "\n".join(
@@ -506,6 +516,20 @@ async def cmd_agent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_sleep(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enable sleep mode: /sleep  (disables proactive pushes for medium/low notifications)"""
+    if not _is_authorized(update):
+        return
+    await update.message.reply_text(user_status.set_sleep_mode(True))
+
+
+async def cmd_wake(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disable sleep mode: /wake"""
+    if not _is_authorized(update):
+        return
+    await update.message.reply_text(user_status.set_sleep_mode(False))
+
+
 async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """List scheduled tasks: /schedule [all]"""
     if not _is_authorized(update):
@@ -536,6 +560,8 @@ async def _set_commands(app: Application) -> None:
         BotCommand("agent", "Spawn a background agent with a custom goal"),
         BotCommand("syscheck", "Run system health check agent"),
         BotCommand("schedule", "List scheduled tasks (/schedule all for history)"),
+        BotCommand("sleep", "Enable sleep mode — hold non-urgent notifications"),
+        BotCommand("wake", "Disable sleep mode — resume proactive notifications"),
     ])
 
 
@@ -564,6 +590,24 @@ async def _on_shutdown(app: Application) -> None:
 def build_app() -> Application:
     _scheduler.start()
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(_set_commands).post_shutdown(_on_shutdown).build()
+
+    # Wire proactive dispatcher: send_fn uses app.bot.send_message so it can
+    # push to the chat from background threads without an active update context.
+    def _proactive_send(text: str) -> None:
+        loop = _proactive_loop
+        chat_id = user_status.get_chat_id()
+        if loop is None or chat_id is None:
+            logger.warning("ProactiveDispatcher: no loop/chat_id yet — message queued for next interaction")
+            return
+        asyncio.run_coroutine_threadsafe(
+            app.bot.send_message(chat_id, text[:4096], parse_mode="Markdown"),
+            loop,
+        )
+
+    proactive_dispatcher.set_send_fn(_proactive_send)
+    notification_manager._on_write = proactive_dispatcher.notify
+    proactive_dispatcher.start()
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("vault", cmd_vault))
@@ -572,6 +616,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("agent", cmd_agent))
     app.add_handler(CommandHandler("syscheck", cmd_syscheck))
     app.add_handler(CommandHandler("schedule", cmd_schedule))
+    app.add_handler(CommandHandler("sleep", cmd_sleep))
+    app.add_handler(CommandHandler("wake", cmd_wake))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
