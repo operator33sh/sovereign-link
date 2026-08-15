@@ -1,12 +1,8 @@
 import logging
 import os
-import random
 import subprocess
 from datetime import datetime
 from urllib.parse import urlparse
-
-import httpx
-import trafilatura
 
 from vector import index_file as _index_file
 from vector import search_vault_semantic as _search_vault_semantic
@@ -14,6 +10,7 @@ from vector import search_vault_semantic as _search_vault_semantic
 logger = logging.getLogger(__name__)
 
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
+AGENT_TEMP_PATH = os.path.join(VAULT_PATH, ".agent_temp")
 
 
 def generate_time_tag() -> str:
@@ -73,56 +70,106 @@ def sync_vault() -> str:
         return f"Error during sync: {e}"
 
 
-_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-]
-
-_MAX_CONTENT_CHARS = 8000
-
-
 def analyze_website(url: str) -> str:
+    from browser import fetch_with_browser_fallback
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return "Error: only HTTP/HTTPS URLs are allowed"
+    return fetch_with_browser_fallback(url)
 
-    headers = {
-        "User-Agent": random.choice(_USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-    }
 
+def write_temp(file_name: str, content: str) -> str:
+    """Write a transient file to .agent_temp/. Never indexed by the VectorDB."""
+    path = os.path.join(AGENT_TEMP_PATH, file_name)
+    if not os.path.realpath(path).startswith(os.path.realpath(AGENT_TEMP_PATH)):
+        return "Error: path traversal not allowed"
     try:
-        response = httpx.get(url, headers=headers, follow_redirects=True, timeout=20.0)
-    except httpx.TimeoutException:
-        return "Error: request timed out"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Temp written: '{file_name}'"
     except Exception as e:
-        return f"Error fetching URL: {e}"
+        return f"Error writing temp file: {e}"
 
-    if response.status_code == 403:
-        return "Error: access forbidden (403) — the site blocked the request"
-    if response.status_code == 429:
-        return "Error: rate limited (429) — try again later"
-    if response.status_code >= 400:
-        return f"Error: HTTP {response.status_code}"
 
-    extracted = trafilatura.extract(
-        response.text,
-        output_format="markdown",
-        include_comments=False,
-        include_tables=True,
-        no_fallback=False,
-    )
+def read_temp(file_name: str) -> str:
+    """Read a transient file from .agent_temp/."""
+    path = os.path.join(AGENT_TEMP_PATH, file_name)
+    if not os.path.realpath(path).startswith(os.path.realpath(AGENT_TEMP_PATH)):
+        return "Error: path traversal not allowed"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"Error: temp file '{file_name}' not found"
+    except Exception as e:
+        return f"Error reading temp file: {e}"
 
-    if not extracted:
-        return "Error: could not extract readable content from this page"
 
-    if len(extracted) > _MAX_CONTENT_CHARS:
-        extracted = extracted[:_MAX_CONTENT_CHARS] + f"\n\n[... truncated at {_MAX_CONTENT_CHARS} chars ...]"
+def cleanup_transient_data(agent_id: str) -> str:
+    """Delete all transient files for a given agent_id from .agent_temp/."""
+    import shutil
+    target = os.path.join(AGENT_TEMP_PATH, agent_id)
+    real_target = os.path.realpath(target)
+    if not real_target.startswith(os.path.realpath(AGENT_TEMP_PATH)):
+        return "Error: path traversal not allowed"
+    if not os.path.exists(target):
+        return f"No transient data found for agent '{agent_id}'."
+    try:
+        shutil.rmtree(target)
+        return f"Transient data for '{agent_id}' purged."
+    except Exception as e:
+        return f"Error during cleanup: {e}"
 
-    return extracted
+
+def list_files(directory: str = "") -> str:
+    target = os.path.join(VAULT_PATH, directory) if directory else VAULT_PATH
+    real_target = os.path.realpath(target)
+    if not real_target.startswith(os.path.realpath(VAULT_PATH)):
+        return "Error: path traversal not allowed"
+    if not os.path.isdir(real_target):
+        return f"Error: '{directory}' is not a directory in the vault"
+    paths = []
+    for root, _, files in os.walk(real_target):
+        for fname in sorted(files):
+            full = os.path.join(root, fname)
+            paths.append(os.path.relpath(full, VAULT_PATH))
+    if not paths:
+        return "Directory is empty."
+    return "\n".join(sorted(paths))
+
+
+def move_file(source_path: str, destination_path: str) -> str:
+    src = os.path.join(VAULT_PATH, source_path)
+    dst = os.path.join(VAULT_PATH, destination_path)
+    real_vault = os.path.realpath(VAULT_PATH)
+    if not os.path.realpath(src).startswith(real_vault):
+        return "Error: source path traversal not allowed"
+    if not os.path.realpath(os.path.dirname(dst) or VAULT_PATH).startswith(real_vault):
+        return "Error: destination path traversal not allowed"
+    if not os.path.exists(src):
+        return f"Error: source file '{source_path}' not found"
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        os.rename(src, dst)
+        return f"Moved '{source_path}' → '{destination_path}'"
+    except Exception as e:
+        return f"Error moving file: {e}"
+
+
+def delete_file(file_path: str) -> str:
+    path = os.path.join(VAULT_PATH, file_path)
+    if not os.path.realpath(path).startswith(os.path.realpath(VAULT_PATH)):
+        return "Error: path traversal not allowed"
+    if not os.path.exists(path):
+        return f"Error: file '{file_path}' not found"
+    if os.path.isdir(path):
+        return "Error: delete_file only deletes files, not directories"
+    try:
+        os.remove(path)
+        return f"Deleted '{file_path}'"
+    except Exception as e:
+        return f"Error deleting file: {e}"
 
 
 def write_blackboard(project_id: str, fragment: str, label: str = "") -> str:
@@ -244,6 +291,122 @@ TOOL_DEFINITIONS = [
                     }
                 },
                 "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_navigate",
+            "description": (
+                "Open a URL in a headless browser session. "
+                "Automatically dismisses cookie walls and returns the page content as Markdown. "
+                "Use this instead of analyze_website when you need to interact with the page afterwards "
+                "(click buttons, scroll, take screenshots). "
+                "The session persists for 10 minutes — reuse the same session_id for follow-up actions. "
+                "Only HTTP/HTTPS URLs are supported."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The full URL to navigate to (must start with http:// or https://).",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional session identifier. Use a consistent name (e.g. 'research') across calls to keep the same browser tab open. Defaults to 'default'.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": (
+                "Click an element on the current page of a browser session using a CSS selector. "
+                "Use after browser_navigate to interact with buttons, links, or form elements. "
+                "Waits 1 second for the page to settle after clicking."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for the element to click (e.g. 'button.load-more', '#show-article', 'a:has-text(\"Lees meer\")').",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "The session_id used in the preceding browser_navigate call. Defaults to 'default'.",
+                    },
+                },
+                "required": ["selector"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_extract_content",
+            "description": (
+                "Extract the current page content as Markdown from an active browser session. "
+                "Use this after browser_click or other interactions to re-read updated content. "
+                "Content is capped at 8000 chars."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "The session_id to extract content from. Defaults to 'default'.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_screenshot",
+            "description": (
+                "Take a screenshot of the current page in a browser session. "
+                "Saves the PNG to disk and returns the file path. "
+                "Use this for visual debugging — e.g. to see what the page looks like before deciding which selector to click."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "The session_id to screenshot. Defaults to 'default'.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_close_session",
+            "description": (
+                "Close and clean up a browser session, freeing all resources. "
+                "Call this when you are done browsing to avoid resource leaks. "
+                "Sessions also auto-close after 10 minutes of inactivity."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "The session_id to close. Defaults to 'default'.",
+                    },
+                },
+                "required": [],
             },
         },
     },
@@ -440,6 +603,139 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "write_temp",
+            "description": (
+                "Write a transient/working-memory file to .agent_temp/. "
+                "Use this for intermediate reasoning, scratchpad notes, draft fragments, "
+                "and agent-to-agent communication. "
+                "These files are NEVER indexed into the VectorDB and will be purged after the goal is complete. "
+                "NEVER use write_vault for intermediate thoughts — use write_temp instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_name": {
+                        "type": "string",
+                        "description": "Relative path within .agent_temp/ (e.g. '{agent_id}/scratchpad.md').",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The transient content to write.",
+                    },
+                },
+                "required": ["file_name", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_temp",
+            "description": "Read a transient file from .agent_temp/ (working memory).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_name": {
+                        "type": "string",
+                        "description": "Relative path within .agent_temp/ to read.",
+                    }
+                },
+                "required": ["file_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cleanup_transient_data",
+            "description": (
+                "Purge all transient working-memory files for a given agent_id from .agent_temp/. "
+                "MUST be called at the end of every agent goal cycle, after the final result "
+                "has been committed to Sovereign Memory (write_vault)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The agent_id whose transient directory should be deleted.",
+                    }
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": (
+                "Recursively list all files in a vault directory. "
+                "Returns a sorted list of relative file paths. "
+                "Use this to get a real-time overview of vault structure without relying on semantic search. "
+                "Omit 'directory' or pass an empty string to list the entire vault."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string",
+                        "description": "Relative path of the directory to list (e.g. '20_Werk'). Leave empty for the vault root.",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_file",
+            "description": (
+                "Move or rename a file within the vault. "
+                "Use this to physically reorganize notes — e.g. promote a note from '20_Werk' to '10_Kern', "
+                "or rename a file. Both source and destination must stay inside the vault."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_path": {
+                        "type": "string",
+                        "description": "Relative path of the file to move (e.g. '20_Werk/idee.md').",
+                    },
+                    "destination_path": {
+                        "type": "string",
+                        "description": "Relative destination path including filename (e.g. '10_Kern/idee.md').",
+                    },
+                },
+                "required": ["source_path", "destination_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": (
+                "Permanently delete a file from the vault. "
+                "Use this to remove duplicates, test-notes, or systemic noise. "
+                "This action is irreversible — confirm intent before calling."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Relative path of the file to delete (e.g. '99_Archief/oud.md').",
+                    }
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_vault_semantic",
             "description": (
                 "Semantic search across the entire fractalisme vault using vector embeddings. "
@@ -471,8 +767,19 @@ TOOL_HANDLERS = {
     "read_vault": lambda args: read_vault(args["file_name"]),
     "write_vault": lambda args: write_vault(args["file_name"], args["content"]),
     "sync_vault": lambda args: sync_vault(),
+    "write_temp": lambda args: write_temp(args["file_name"], args["content"]),
+    "read_temp": lambda args: read_temp(args["file_name"]),
+    "cleanup_transient_data": lambda args: cleanup_transient_data(args["agent_id"]),
+    "list_files": lambda args: list_files(args.get("directory", "")),
+    "move_file": lambda args: move_file(args["source_path"], args["destination_path"]),
+    "delete_file": lambda args: delete_file(args["file_path"]),
     "search_vault_semantic": lambda args: _search_vault_semantic(args["query"]),
     "analyze_website": lambda args: analyze_website(args["url"]),
+    "browser_navigate": lambda args: _browser_navigate(args["url"], args.get("session_id", "default")),
+    "browser_click": lambda args: _browser_click(args["selector"], args.get("session_id", "default")),
+    "browser_extract_content": lambda args: _browser_extract_content(args.get("session_id", "default")),
+    "browser_screenshot": lambda args: _browser_screenshot(args.get("session_id", "default")),
+    "browser_close_session": lambda args: _browser_close_session(args.get("session_id", "default")),
     # Agent management — imported lazily to avoid circular imports
     "spawn_agent": lambda args: _agent_spawn(args["goal"], args.get("agent_name", "Agent"), args.get("report_to_chat", False)),
     "get_agent_status": lambda args: _agent_status(args["agent_id"]),
@@ -485,6 +792,31 @@ TOOL_HANDLERS = {
     "spawn_peer": lambda args: spawn_peer(args["goal"], args["role"], args["project_id"], args["swarm_id"]),
     "spawn_swarm": lambda args: _swarm_spawn(args["goal"], args["project_id"], args.get("roles"), args.get("swarm_size", 5), args.get("report_to_chat", False)),
 }
+
+
+def _browser_navigate(url: str, session_id: str) -> str:
+    from browser import browser_navigate
+    return browser_navigate(url, session_id)
+
+
+def _browser_click(selector: str, session_id: str) -> str:
+    from browser import browser_click
+    return browser_click(selector, session_id)
+
+
+def _browser_extract_content(session_id: str) -> str:
+    from browser import browser_extract_content
+    return browser_extract_content(session_id)
+
+
+def _browser_screenshot(session_id: str) -> str:
+    from browser import browser_screenshot
+    return browser_screenshot(session_id)
+
+
+def _browser_close_session(session_id: str) -> str:
+    from browser import browser_close_session
+    return browser_close_session(session_id)
 
 
 def _agent_spawn(goal: str, agent_name: str, report_to_chat: bool = False) -> str:
