@@ -47,6 +47,7 @@ def _fmt_local(dt: datetime) -> str:
 class _Scheduler:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._wake = threading.Event()   # set to interrupt sleep early
         self._thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
@@ -110,6 +111,7 @@ class _Scheduler:
             tasks.append(task)
             self._save(tasks)
 
+        self._wake.set()  # interrupt any current sleep so the loop re-evaluates immediately
         return f"Ingepland `{task_id}`: **{task['description']}** om {_fmt_local(exec_dt)}"
 
     def list_tasks(self, include_done: bool = False) -> str:
@@ -223,14 +225,41 @@ class _Scheduler:
             if changed:
                 self._save(tasks)
 
+    def _next_wake_secs(self) -> float:
+        """Return seconds until the next pending task is due (capped at _POLL_INTERVAL)."""
+        try:
+            with self._lock:
+                tasks = self._load()
+        except Exception:
+            return float(_POLL_INTERVAL)
+        now = _now_utc()
+        earliest: datetime | None = None
+        for task in tasks:
+            if task["status"] != "pending":
+                continue
+            try:
+                exec_dt = _parse_dt(task["execution_time"])
+            except Exception:
+                continue
+            if earliest is None or exec_dt < earliest:
+                earliest = exec_dt
+        if earliest is None:
+            return float(_POLL_INTERVAL)
+        secs = (earliest - now).total_seconds()
+        # Always sleep at least 0.5 s so we don't busy-spin on overdue tasks
+        return max(0.5, min(secs, float(_POLL_INTERVAL)))
+
     def _run_loop(self) -> None:
-        logger.info("Scheduler: loop started, polling every %ds", _POLL_INTERVAL)
+        logger.info("Scheduler: loop started (event-driven, max poll %ds)", _POLL_INTERVAL)
         while True:
             try:
                 self._tick()
             except Exception:
                 logger.exception("Scheduler: unhandled error in tick")
-            time.sleep(_POLL_INTERVAL)
+            secs = self._next_wake_secs()
+            logger.debug("Scheduler: sleeping %.1fs until next task", secs)
+            self._wake.clear()
+            self._wake.wait(timeout=secs)  # wakes early when add_task() sets the event
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
