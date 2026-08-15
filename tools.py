@@ -212,6 +212,22 @@ def read_signals(agent_name: str) -> str:
     return "\n\n---\n\n".join(signals) if signals else f"No signals for {agent_name}."
 
 
+def write_notification(
+    content: str,
+    agent_id: str = "system",
+    priority: str = "medium",
+    category: str = "insight",
+    related_file: str | None = None,
+) -> str:
+    from notifications import notification_manager
+    return notification_manager.write(content, agent_id, priority, category, related_file)
+
+
+def get_pending_notifications() -> str:
+    from notifications import notification_manager
+    return notification_manager.get_pending()
+
+
 def schedule_task(execution_time: str, action: str, parameters: dict, description: str = "") -> str:
     from scheduler import scheduler as _scheduler
     return _scheduler.add_task(execution_time, action, parameters, description)
@@ -587,6 +603,61 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "write_notification",
+            "description": (
+                "Push a notification into the persistent queue so the user sees it later. "
+                "Use this as the final step of any background agent or scheduled task to report completion. "
+                "Notifications are stored in vault/.system/notifications.json and retrieved via get_pending_notifications."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The notification message in natural Dutch language.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Identifier of the agent or system that generated this notification (e.g. 'AngerAnalysisAgent').",
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": "Urgency level. Default: 'medium'.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["insight", "alert", "system", "wellness", "task"],
+                        "description": "Type of notification. Default: 'insight'.",
+                    },
+                    "related_file": {
+                        "type": "string",
+                        "description": "Optional vault path to a file where the full result is stored (e.g. 'Analyses/Anger_2026-08-16.md').",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_pending_notifications",
+            "description": (
+                "Retrieve all unread notifications from the queue, sorted by priority then time. "
+                "Marks them as delivered so they won't appear again. "
+                "Call this when the user asks 'wat is er gebeurd?', 'zijn er meldingen?', or returns after being away."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "schedule_task",
             "description": (
                 "Schedule any registered tool to run at a specific future time. "
@@ -874,6 +945,15 @@ TOOL_HANDLERS = {
     "read_signals": lambda args: read_signals(args["agent_name"]),
     "spawn_peer": lambda args: spawn_peer(args["goal"], args["role"], args["project_id"], args["swarm_id"]),
     "spawn_swarm": lambda args: _swarm_spawn(args["goal"], args["project_id"], args.get("roles"), args.get("swarm_size", 5), args.get("report_to_chat", False)),
+    # Notifications
+    "write_notification": lambda args: write_notification(
+        args["content"],
+        args.get("agent_id", "system"),
+        args.get("priority", "medium"),
+        args.get("category", "insight"),
+        args.get("related_file"),
+    ),
+    "get_pending_notifications": lambda args: get_pending_notifications(),
     # Scheduler
     "schedule_task": lambda args: schedule_task(args["execution_time"], args["action"], args["parameters"], args.get("description", "")),
     "list_scheduled_tasks": lambda args: list_scheduled_tasks(args.get("include_done", False)),
