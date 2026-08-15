@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 import httpx
+from timezone_manager import get_zoneinfo as _get_local_tz
 
 import context
 from tools import TOOL_DEFINITIONS, TOOL_HANDLERS
@@ -225,7 +226,7 @@ def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jp
     prompt = user_message or "What is in this image?"
     context.add_message("user", prompt)
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(tz=_get_local_tz()).strftime("%Y-%m-%d %H:%M:%S")
     system_with_time = f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
 
     payload = {
@@ -269,7 +270,7 @@ def run_triggered() -> str:
     Only the assistant's response is stored (if non-silent).
     Returns the response text, or "" if Luna chose SILENT or produced nothing.
     """
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(tz=_get_local_tz()).strftime("%Y-%m-%d %H:%M:%S")
     system_with_time = (
         f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. "
         "This is context only — do not act on it."
@@ -316,7 +317,7 @@ def run(user_message: str) -> str:
     is_first = not context.get_history()  # check before add_message
     context.add_message("user", user_message)
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(tz=_get_local_tz()).strftime("%Y-%m-%d %H:%M:%S")
     system_with_time = f"{SYSTEM_PROMPT}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
 
     if is_first:

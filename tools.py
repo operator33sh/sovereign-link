@@ -719,7 +719,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "execution_time": {
                         "type": "string",
-                        "description": "ISO 8601 datetime when the task should run (e.g. '2026-08-16T03:00:00'). Naive datetimes are treated as local time.",
+                        "description": "ISO 8601 datetime when the task should run. Use the same local time shown in the system prompt — e.g. if it shows '2026-08-15 14:30:00', schedule 5 min later as '2026-08-15T14:35:00'. Do NOT convert to UTC. Naive datetimes are interpreted as the user's configured local timezone.",
                     },
                     "action": {
                         "type": "string",
