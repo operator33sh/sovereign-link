@@ -212,6 +212,21 @@ def read_signals(agent_name: str) -> str:
     return "\n\n---\n\n".join(signals) if signals else f"No signals for {agent_name}."
 
 
+def schedule_task(execution_time: str, action: str, parameters: dict, description: str = "") -> str:
+    from scheduler import scheduler as _scheduler
+    return _scheduler.add_task(execution_time, action, parameters, description)
+
+
+def list_scheduled_tasks(include_done: bool = False) -> str:
+    from scheduler import scheduler as _scheduler
+    return _scheduler.list_tasks(include_done)
+
+
+def cancel_scheduled_task(task_id: str) -> str:
+    from scheduler import scheduler as _scheduler
+    return _scheduler.cancel_task(task_id)
+
+
 def spawn_peer(goal: str, role: str, project_id: str, swarm_id: str) -> str:
     """Spawn a peer agent in the same swarm (horizontal, not hierarchical)."""
     from agent import _get_swarm_coordinator
@@ -572,6 +587,74 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "schedule_task",
+            "description": (
+                "Schedule any registered tool to run at a specific future time. "
+                "The scheduler checks every minute and fires tasks when their time arrives. "
+                "Tasks are persisted to vault/.system/scheduled_tasks.json and survive bot restarts. "
+                "Example: schedule spawn_agent at 3am to run a pattern analysis while the user sleeps."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "execution_time": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime when the task should run (e.g. '2026-08-16T03:00:00'). Naive datetimes are treated as local time.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "The tool name to execute — must be a registered tool such as 'spawn_agent', 'write_vault', or 'search_vault_semantic'.",
+                    },
+                    "parameters": {
+                        "type": "object",
+                        "description": "Arguments for the action, matching that tool's parameter schema exactly.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Human-readable label shown in the task list (e.g. 'Patroonanalyse woede'). Optional but recommended.",
+                    },
+                },
+                "required": ["execution_time", "action", "parameters"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_scheduled_tasks",
+            "description": "Show all scheduled tasks with their execution times and current status (pending / completed / failed / cancelled).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_done": {
+                        "type": "boolean",
+                        "description": "If true, also show completed, failed, and cancelled tasks. Default: false (pending only).",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_scheduled_task",
+            "description": "Cancel a pending scheduled task by its task_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The 8-character task_id returned by schedule_task.",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_swarm",
             "description": (
                 "Start a rhizomatic peer swarm where agents collaborate on a shared Blackboard. "
@@ -791,6 +874,10 @@ TOOL_HANDLERS = {
     "read_signals": lambda args: read_signals(args["agent_name"]),
     "spawn_peer": lambda args: spawn_peer(args["goal"], args["role"], args["project_id"], args["swarm_id"]),
     "spawn_swarm": lambda args: _swarm_spawn(args["goal"], args["project_id"], args.get("roles"), args.get("swarm_size", 5), args.get("report_to_chat", False)),
+    # Scheduler
+    "schedule_task": lambda args: schedule_task(args["execution_time"], args["action"], args["parameters"], args.get("description", "")),
+    "list_scheduled_tasks": lambda args: list_scheduled_tasks(args.get("include_done", False)),
+    "cancel_scheduled_task": lambda args: cancel_scheduled_task(args["task_id"]),
 }
 
 

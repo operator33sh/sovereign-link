@@ -18,6 +18,7 @@ from tools import write_vault, sync_vault, generate_time_tag
 from memory_manager import run_memory_pipeline
 from agent import run_system_check
 import chat_bridge
+from scheduler import scheduler as _scheduler
 
 
 logging.basicConfig(
@@ -505,6 +506,15 @@ async def cmd_agent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """List scheduled tasks: /schedule [all]"""
+    if not _is_authorized(update):
+        return
+    include_done = "all" in (ctx.args or [])
+    text = _scheduler.list_tasks(include_done)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 async def cmd_syscheck(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Run the built-in system health check agent."""
     if not _is_authorized(update):
@@ -525,6 +535,7 @@ async def _set_commands(app: Application) -> None:
         BotCommand("whisper", "Generate a tweet from a random vault insight"),
         BotCommand("agent", "Spawn a background agent with a custom goal"),
         BotCommand("syscheck", "Run system health check agent"),
+        BotCommand("schedule", "List scheduled tasks (/schedule all for history)"),
     ])
 
 
@@ -551,6 +562,7 @@ async def _on_shutdown(app: Application) -> None:
 
 
 def build_app() -> Application:
+    _scheduler.start()
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(_set_commands).post_shutdown(_on_shutdown).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
@@ -559,6 +571,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("whisper", cmd_whisper))
     app.add_handler(CommandHandler("agent", cmd_agent))
     app.add_handler(CommandHandler("syscheck", cmd_syscheck))
+    app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
