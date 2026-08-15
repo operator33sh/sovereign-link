@@ -253,6 +253,28 @@ def cancel_scheduled_task(task_id: str) -> str:
     return _scheduler.cancel_task(task_id)
 
 
+def list_automations() -> str:
+    from automations import automation_engine
+    return automation_engine.list_automations()
+
+
+def create_automation(
+    name: str,
+    trigger_type: str,
+    schedule: str,
+    action: str,
+    parameters: dict,
+    enabled: bool = True,
+) -> str:
+    from automations import automation_engine
+    return automation_engine.create_automation(name, trigger_type, schedule, action, parameters, enabled)
+
+
+def toggle_automation(automation_id: str, enabled: bool) -> str:
+    from automations import automation_engine
+    return automation_engine.toggle_automation(automation_id, enabled)
+
+
 def set_sleep_mode(sleeping: bool) -> str:
     from proactive import user_status
     return user_status.set_sleep_mode(sleeping)
@@ -811,6 +833,106 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "list_automations",
+            "description": (
+                "List all defined automations with their trigger schedule, action, "
+                "next scheduled run time, and enabled/disabled status. "
+                "Use this when the user asks what recurring automations are configured."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_automation",
+            "description": (
+                "Create a new recurring automation that fires a tool action on a schedule. "
+                "Supports cron expressions (e.g. '0 8 * * 1' = every Monday at 08:00) "
+                "and interval triggers (frequency in seconds). "
+                "For spawn_agent actions, the automation name is automatically prepended "
+                "to the goal for traceability in logs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Human-readable label for this automation, e.g. 'Weekly Review'.",
+                    },
+                    "trigger_type": {
+                        "type": "string",
+                        "enum": ["cron", "interval"],
+                        "description": (
+                            "'cron' for calendar-based schedules (uses 5-field cron syntax); "
+                            "'interval' for fixed frequency (schedule = seconds between runs)."
+                        ),
+                    },
+                    "schedule": {
+                        "type": "string",
+                        "description": (
+                            "For cron: 5-field cron expression in local time "
+                            "(e.g. '0 8 * * 1' = Monday 08:00, '30 9 * * 1-5' = weekdays 09:30). "
+                            "For interval: number of seconds between runs (e.g. '3600' = hourly)."
+                        ),
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": (
+                            "The tool to call when this automation fires. "
+                            "Must be a registered tool such as 'spawn_agent', 'write_vault', "
+                            "or 'search_vault_semantic'."
+                        ),
+                    },
+                    "parameters": {
+                        "type": "object",
+                        "description": (
+                            "Arguments for the action, matching that tool's parameter schema exactly. "
+                            "For spawn_agent: include 'goal' (and optionally 'agent_name'). "
+                            "The automation name will be prepended to the goal automatically."
+                        ),
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "Whether to activate the automation immediately. Default: true.",
+                    },
+                },
+                "required": ["name", "trigger_type", "schedule", "action", "parameters"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "toggle_automation",
+            "description": (
+                "Enable or disable a specific automation by its ID. "
+                "Disabled automations remain in the registry but are skipped by the engine. "
+                "Use list_automations to find the automation ID."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "automation_id": {
+                        "type": "string",
+                        "description": "The 8-character automation ID returned by create_automation.",
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "True to enable, false to disable.",
+                    },
+                },
+                "required": ["automation_id", "enabled"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_swarm",
             "description": (
                 "Start a rhizomatic peer swarm where agents collaborate on a shared Blackboard. "
@@ -1049,6 +1171,17 @@ TOOL_HANDLERS = {
     # User status / sleep mode
     "set_sleep_mode": lambda args: set_sleep_mode(args["sleeping"]),
     "get_user_status": lambda args: get_user_status(),
+    # Automations
+    "list_automations": lambda args: list_automations(),
+    "create_automation": lambda args: create_automation(
+        args["name"],
+        args["trigger_type"],
+        args["schedule"],
+        args["action"],
+        args["parameters"],
+        args.get("enabled", True),
+    ),
+    "toggle_automation": lambda args: toggle_automation(args["automation_id"], args["enabled"]),
 }
 
 

@@ -5,3 +5,4 @@ chromadb
 watchdog
 faster-whisper
 playwright
+croniter

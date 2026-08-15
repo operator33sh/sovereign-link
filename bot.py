@@ -19,6 +19,7 @@ from memory_manager import run_memory_pipeline
 from agent import run_system_check
 import chat_bridge
 from scheduler import scheduler as _scheduler
+from automations import automation_engine as _automation_engine
 from proactive import user_status, proactive_dispatcher
 from notifications import notification_manager
 
@@ -589,6 +590,7 @@ async def _on_shutdown(app: Application) -> None:
 
 def build_app() -> Application:
     _scheduler.start()
+    _automation_engine.start()
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(_set_commands).post_shutdown(_on_shutdown).build()
 
     # Wire proactive dispatcher: send_fn uses app.bot.send_message so it can
