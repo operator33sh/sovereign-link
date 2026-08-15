@@ -129,7 +129,8 @@ async def cmd_vault(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
 
-    timestamp = datetime.now()
+    from timezone_manager import get_zoneinfo as _get_local_tz
+    timestamp = datetime.now(tz=_get_local_tz())
 
     # Take last 10 messages (5 exchanges) from session history
     recent = context.get_history()[-10:]
@@ -517,6 +518,19 @@ async def cmd_agent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_timezone(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+    from timezone_manager import set_timezone, get_timezone_info
+    args = ctx.args
+    if not args:
+        await update.message.reply_text(get_timezone_info())
+        return
+    tz_string = " ".join(args).strip()
+    result = set_timezone(tz_string)
+    await update.message.reply_text(result)
+
+
 async def cmd_sleep(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Enable sleep mode: /sleep  (disables proactive pushes for medium/low notifications)"""
     if not _is_authorized(update):
@@ -563,6 +577,7 @@ async def _set_commands(app: Application) -> None:
         BotCommand("schedule", "List scheduled tasks (/schedule all for history)"),
         BotCommand("sleep", "Enable sleep mode — hold non-urgent notifications"),
         BotCommand("wake", "Disable sleep mode — resume proactive notifications"),
+        BotCommand("timezone", "Get or set local timezone (/timezone Europe/Amsterdam)"),
     ])
 
 
@@ -620,6 +635,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(CommandHandler("sleep", cmd_sleep))
     app.add_handler(CommandHandler("wake", cmd_wake))
+    app.add_handler(CommandHandler("timezone", cmd_timezone))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

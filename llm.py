@@ -150,7 +150,7 @@ def extract_memory_insights(transcript: str, prior_memory: str = "") -> dict:
         - insights: list of dicts with keys timestamp, core_insight, emotional_state,
                     tags, connected_nodes, open_questions
     """
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(tz=_get_local_tz()).strftime("%Y-%m-%d")
     prompt = (
         "Analyse the following conversation transcript and extract High-Value Insights (HVIs).\n"
         "HVIs are: psychological breakthroughs, redefined values, recurring shadow patterns, "
