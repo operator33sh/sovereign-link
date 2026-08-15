@@ -275,6 +275,11 @@ def toggle_automation(automation_id: str, enabled: bool) -> str:
     return automation_engine.toggle_automation(automation_id, enabled)
 
 
+def delete_automation(automation_id: str) -> str:
+    from automations import automation_engine
+    return automation_engine.delete_automation(automation_id)
+
+
 def set_sleep_mode(sleeping: bool) -> str:
     from proactive import user_status
     return user_status.set_sleep_mode(sleeping)
@@ -933,6 +938,26 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "delete_automation",
+            "description": (
+                "Permanently remove an automation from the registry by its 8-character ID. "
+                "This cannot be undone. Use list_automations to find the automation ID."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "automation_id": {
+                        "type": "string",
+                        "description": "The 8-character automation ID to permanently delete.",
+                    },
+                },
+                "required": ["automation_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_swarm",
             "description": (
                 "Start a rhizomatic peer swarm where agents collaborate on a shared Blackboard. "
@@ -1182,6 +1207,7 @@ TOOL_HANDLERS = {
         args.get("enabled", True),
     ),
     "toggle_automation": lambda args: toggle_automation(args["automation_id"], args["enabled"]),
+    "delete_automation": lambda args: delete_automation(args["automation_id"]),
 }
 
 

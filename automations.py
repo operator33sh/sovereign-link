@@ -417,6 +417,16 @@ class AutomationEngine:
                     )
         return f"Automation `{automation_id}` niet gevonden."
 
+    def delete_automation(self, automation_id: str) -> str:
+        with self._lock:
+            automations = self._load()
+            remaining = [a for a in automations if a["id"] != automation_id]
+            if len(remaining) == len(automations):
+                return f"Automation `{automation_id}` niet gevonden."
+            deleted = next(a for a in automations if a["id"] == automation_id)
+            self._save(remaining)
+        return f"Automation `{automation_id}` ({deleted['name']}) permanent verwijderd."
+
 
 # Module-level singleton
 automation_engine = AutomationEngine()
