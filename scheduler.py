@@ -152,12 +152,12 @@ class _Scheduler:
 
     def _fire(self, task: dict) -> tuple[bool, str]:
         """Dispatch a task to TOOL_HANDLERS. Returns (success, message)."""
-        # Late import to avoid circular dependency (tools.py imports scheduler)
-        from tools import TOOL_HANDLERS
-        action = task["action"]
-        if action not in TOOL_HANDLERS:
-            return False, f"Unknown action '{action}' — not in TOOL_HANDLERS"
         try:
+            # Late import inside try to avoid silent fail if import raises
+            from tools import TOOL_HANDLERS
+            action = task["action"]
+            if action not in TOOL_HANDLERS:
+                return False, f"Unknown action '{action}' — not in TOOL_HANDLERS"
             result = TOOL_HANDLERS[action](task["parameters"])
             return True, str(result)[:500]
         except Exception as e:
@@ -166,9 +166,11 @@ class _Scheduler:
 
     def _tick(self) -> None:
         now = _now_utc()
+
+        # Phase 1: identify due tasks (under lock, no tool execution)
         with self._lock:
             tasks = self._load()
-            changed = False
+            due = []
             for task in tasks:
                 if task["status"] != "pending":
                     continue
@@ -176,14 +178,36 @@ class _Scheduler:
                     exec_dt = _parse_dt(task["execution_time"])
                 except Exception:
                     continue
-                if exec_dt > now:
-                    continue
+                if exec_dt <= now:
+                    due.append(task)
 
-                logger.info(
-                    "Scheduler: firing task %s — %s",
-                    task["task_id"], task["description"],
-                )
+        if not due:
+            return
+
+        # Phase 2: fire tasks WITHOUT holding the lock
+        # (prevents deadlock when a tool handler calls back into the scheduler)
+        results: dict[str, tuple[bool, str]] = {}
+        for task in due:
+            logger.info(
+                "Scheduler: firing task %s — %s",
+                task["task_id"], task["description"],
+            )
+            try:
                 success, output = self._fire(task)
+            except Exception as e:
+                # _fire() should never raise, but guard anyway so task gets marked failed
+                logger.exception("Scheduler: unexpected error firing task %s", task["task_id"])
+                success, output = False, str(e)[:300]
+            results[task["task_id"]] = (success, output)
+
+        # Phase 3: persist results (under lock, re-read to catch concurrent changes)
+        with self._lock:
+            tasks = self._load()
+            changed = False
+            for task in tasks:
+                if task["task_id"] not in results:
+                    continue
+                success, output = results[task["task_id"]]
                 task["status"] = "completed" if success else "failed"
                 task["executed_at"] = now.isoformat()
                 if success:
@@ -196,7 +220,6 @@ class _Scheduler:
                     task["task_id"],
                     "completed" if success else f"FAILED: {output[:80]}",
                 )
-
             if changed:
                 self._save(tasks)
 
