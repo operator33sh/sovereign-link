@@ -19,7 +19,10 @@ _AGENT_MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", 50))
 _AGENT_LLM_TIMEOUT = float(os.environ.get("AGENT_LLM_TIMEOUT", 180.0))
 _AGENT_SWARM_SIZE = int(os.environ.get("AGENT_SWARM_SIZE", 5))
 
-from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, write_vault, sync_vault
+from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH
+
+# Execution logs — outside the vault, never indexed or synced
+LOGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 # ------------------------------------------------------------------
 # Global agent registry — thread-safe
@@ -48,18 +51,43 @@ logger = logging.getLogger(__name__)
 _AGENT_SYSTEM_PROMPT = """You are a Background Agent running inside the Sovereign-Link AI system.
 Your job is to autonomously achieve the given goal using the tools available to you.
 
-Available tools: read_vault, write_vault, sync_vault, analyze_website, search_vault_semantic.
+## Memory Architecture — STRICT SEPARATION
 
-Work methodically through the Observe → Reason → Act → Evaluate cycle:
-- OBSERVE: gather information needed to make progress
-- REASON: decide the best next action
+### Working Memory (Transient) — use write_temp
+Any intermediate reasoning, scratchpad notes, draft fragments, hypotheses in progress,
+or agent-to-agent communication must go to .agent_temp/ using write_temp.
+These files are NEVER indexed and will be purged after goal completion.
+
+### Sovereign Memory (Permanent) — use write_vault
+Only validated, final-state insights, deliverables, and SovereignLog entries belong here.
+Before calling write_vault, ask yourself:
+  "Is this a final, validated insight that contributes to long-term memory?"
+If the answer is "not yet" — use write_temp instead.
+
+### Taal van Vault-notities
+Alle notities die je opslaat via write_vault MOETEN in het Nederlands geschreven zijn.
+Als de broninhoud in het Engels of een andere taal is, vertaal je deze naar het Nederlands vóór het opslaan.
+Titels, koppen, tags en de volledige inhoud zijn altijd in het Nederlands.
+
+### Forbidden patterns
+- NO write_vault for intermediate thoughts, reasoning logs, or draft notes.
+- NO files with agent IDs, hashes, or "_temp/_draft/_v1" in their names in main vault dirs.
+- NO "Report_XXXXX.md" files unless explicitly requested as a final deliverable.
+
+### Cleanup
+When GOAL_COMPLETE, call cleanup_transient_data with your agent_id to purge working memory.
+
+## Reasoning cycle
+Work methodically through Observe → Reason → Act → Evaluate:
+- OBSERVE: gather information (read_vault, search_vault_semantic, analyze_website)
+- REASON: decide the best next action; use write_temp for scratchpad
 - ACT: call the appropriate tool
 - EVALUATE: assess whether the goal has been reached
 
 When the goal is fully achieved, end your response with exactly this marker on its own line:
 GOAL_COMPLETE: <one-sentence summary of what was accomplished>
 
-Do not claim GOAL_COMPLETE until all deliverables (files written, reports saved, etc.) are done.
+Do not claim GOAL_COMPLETE until all deliverables are written and transient data is cleaned up.
 """
 
 _EVAL_PROMPT = (
@@ -102,7 +130,10 @@ class BackgroundAgent:
         self._llm_trigger = llm_trigger            # callable() | None
 
         date_str = datetime.now().strftime("%Y-%m-%d")
-        self.log_file = f"agents/AgentLog_{date_str}.md"
+        ts_str = datetime.now().strftime("%H%M%S")
+        self._temp_dir_name = f"{agent_name}_{ts_str}"
+        # Execution log lives outside the vault — never indexed, never synced to git
+        self.log_file = os.path.join(LOGS_PATH, f"{agent_name}_{date_str}_{ts_str}.md")
         self._log_lines: list[str] = [
             f"# Agent Log — {date_str}\n\n",
             f"**Agent:** {agent_name}  \n",
@@ -117,11 +148,13 @@ class BackgroundAgent:
     # ------------------------------------------------------------------
 
     def _flush_log(self) -> None:
-        """Write current log state to vault (best-effort)."""
+        """Write execution log to LOGS_PATH — outside the vault, never indexed."""
         try:
-            write_vault(self.log_file, "".join(self._log_lines))
+            os.makedirs(LOGS_PATH, exist_ok=True)
+            with open(self.log_file, "w", encoding="utf-8") as f:
+                f.write("".join(self._log_lines))
         except Exception:
-            logger.exception("Agent: failed to flush log to vault")
+            logger.exception("Agent: failed to flush log to logs/")
 
     def _append_log(self, phase: str, content: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
@@ -186,8 +219,15 @@ class BackgroundAgent:
         Returns a human-readable result string.
         Designed to be called inside asyncio.to_thread().
         """
+        identity_block = (
+            f"\n\n## Your Identity\n"
+            f"- **agent_name:** `{self.agent_name}`\n"
+            f"- **temp_dir:** `{self._temp_dir_name}/` — use this prefix for all write_temp calls "
+            f"(e.g. `write_temp(\"{self._temp_dir_name}/scratchpad.md\", ...)`)\n"
+            f"- **cleanup:** call `cleanup_transient_data` with agent_id=`{self._temp_dir_name}` at GOAL_COMPLETE\n"
+        )
         self._messages = [
-            {"role": "system", "content": _AGENT_SYSTEM_PROMPT},
+            {"role": "system", "content": _AGENT_SYSTEM_PROMPT + identity_block},
             {"role": "user", "content": f"Goal: {self.goal}"},
         ]
         self._append_log("INIT", f"Goal accepted: **{self.goal}**")
@@ -230,6 +270,7 @@ class BackgroundAgent:
             if "GOAL_COMPLETE:" in text:
                 self._append_log("COMPLETE", text)
                 self._finalize("SUCCESS")
+                self._purge_temp()
                 sync_vault()
                 self._notify_chat(text)
                 return text
@@ -247,10 +288,21 @@ class BackgroundAgent:
         sync_vault()
         result = (
             f"Agent '{self.agent_name}' reached max iterations ({self.max_iterations}). "
-            f"Partial log saved to `{self.log_file}`."
+            f"Partial log at: {self.log_file}"
         )
         self._notify_chat(result)
         return result
+
+    def _purge_temp(self) -> None:
+        """Delete this agent's transient working directory from .agent_temp/."""
+        import shutil
+        temp_dir = os.path.join(AGENT_TEMP_PATH, self._temp_dir_name)
+        try:
+            if os.path.isdir(temp_dir):
+                shutil.rmtree(temp_dir)
+                logger.info("Agent %s: purged transient data at %s", self.agent_name, temp_dir)
+        except Exception:
+            logger.exception("Agent %s: failed to purge temp dir %s", self.agent_name, temp_dir)
 
     def _finalize(self, status: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
@@ -259,10 +311,10 @@ class BackgroundAgent:
         )
         self._flush_log()
 
-    def _write_final_report(self, result: str) -> str:
-        """Write a structured final report to the vault. Returns the report path."""
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        report_path = f"agents/reports/{self.agent_name}_{date_str}.md"
+    def _notify_chat(self, result: str) -> None:
+        """Notify Luna via context injection if callbacks are set. No vault write."""
+        if not self._context_injector and not self._llm_trigger:
+            return
 
         conclusion = ""
         for line in result.splitlines():
@@ -270,38 +322,13 @@ class BackgroundAgent:
                 conclusion = line.split("GOAL_COMPLETE:", 1)[1].strip()
                 break
 
-        status = "Voltooid" if conclusion else "Timeout / Gedeeltelijk"
-        content = (
-            f"# Agent Rapport — {self.agent_name}\n\n"
-            f"**Datum:** {date_str}  \n"
-            f"**Doel:** {self.goal}  \n"
-            f"**Status:** {status}  \n\n"
-            "---\n\n"
-            "## Conclusie\n\n"
-            + (conclusion if conclusion else "_Geen GOAL_COMPLETE marker gevonden._")
-            + "\n\n"
-            "## Volledige uitvoer\n\n"
-            f"{result}\n\n"
-            f"**Uitvoeringslog:** `{self.log_file}`\n"
-        )
-        write_vault(report_path, content)
-        return report_path
-
-    def _notify_chat(self, result: str) -> None:
-        """Always write a final vault report. Notify Luna via context injection if callbacks set."""
-        report_path = self._write_final_report(result)
-
-        if not self._context_injector and not self._llm_trigger:
-            return
-
         if self._context_injector:
             try:
                 notification = (
                     f"[AGENT VOLTOOID — {self.agent_name}]\n\n"
                     f"**Doel:** {self.goal}\n"
-                    f"**Rapport:** `{report_path}`\n\n"
-                    "Lees het rapport via `read_vault` en presenteer de bevindingen "
-                    "aan de gebruiker in jouw eigen stem."
+                    f"**Conclusie:** {conclusion or '(timeout — geen GOAL_COMPLETE bereikt)'}\n"
+                    f"**Uitvoeringslog:** `{self.log_file}`"
                 )
                 self._context_injector(notification)
             except Exception:
@@ -344,8 +371,15 @@ class SwarmAgent(BackgroundAgent):
 
     def run(self) -> str:
         """Override to use swarm-aware system prompt."""
+        identity_block = (
+            f"\n\n## Your Identity\n"
+            f"- **agent_name:** `{self.agent_name}`\n"
+            f"- **temp_dir:** `{self._temp_dir_name}/` — use this prefix for all write_temp calls "
+            f"(e.g. `write_temp(\"{self._temp_dir_name}/scratchpad.md\", ...)`)\n"
+            f"- **cleanup:** call `cleanup_transient_data` with agent_id=`{self._temp_dir_name}` at GOAL_COMPLETE\n"
+        )
         self._messages = [
-            {"role": "system", "content": self._system_prompt},
+            {"role": "system", "content": self._system_prompt + identity_block},
             {"role": "user", "content": f"Goal: {self.goal}"},
         ]
         self._append_log("INIT", f"[{self.role}] Goal accepted: **{self.goal}**")
@@ -382,6 +416,7 @@ class SwarmAgent(BackgroundAgent):
             if "GOAL_COMPLETE:" in text:
                 self._append_log("COMPLETE", text)
                 self._finalize("SUCCESS")
+                self._purge_temp()
                 sync_vault()
                 self._notify_chat(text)
                 return text
@@ -397,7 +432,7 @@ class SwarmAgent(BackgroundAgent):
         sync_vault()
         result = (
             f"Agent '{self.agent_name}' reached max iterations ({self.max_iterations}). "
-            f"Partial log saved to `{self.log_file}`."
+            f"Partial log at: {self.log_file}"
         )
         self._notify_chat(result)
         return result
@@ -648,7 +683,7 @@ def launch_swarm(
 
     return (
         f"Swarm `{swarm_id}` started with {len(roles)} peer(s): {', '.join(roles)}.\n"
-        f"Blackboard: `agents/blackboard/{project_id}/`\n"
+        f"Blackboard: `.agent_temp/blackboard/{project_id}/` (transient)\n"
         f"SynthesisAgent will spawn automatically when all peers complete.\n"
         f"Use `list_agents()` to check progress."
     )

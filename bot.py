@@ -314,9 +314,13 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
 
-    global _message_count, _messages_since_last_memory
+    global _message_count, _messages_since_last_memory, _proactive_loop
     _message_count += 1
     _messages_since_last_memory += 1
+
+    # Track activity (sleep mode is NOT cleared by user messages)
+    user_status.update_activity(update.effective_chat.id)
+    _proactive_loop = asyncio.get_event_loop()
 
     # Typing indicator immediately so the user knows transcription has started
     async def keep_typing():
@@ -364,7 +368,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 update.message.reply_text(text[:4096]), _loop
             )
         )
-        chat_bridge.set_context_injector(lambda text: context.add_message("user", text))
+        chat_bridge.set_context_injector(_sleep_aware_context_injector)
         chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
         reply = await asyncio.to_thread(llm.run, transcription)
@@ -383,14 +387,34 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Fout bij verwerken audiobericht: {e}")
 
 
+def _sleep_aware_context_injector(text: str) -> None:
+    """Context injector that redirects agent notifications to the queue during sleep mode."""
+    if user_status.is_sleeping():
+        try:
+            notification_manager.write(
+                content=text,
+                agent_id="agent",
+                priority="medium",
+                category="task",
+            )
+        except Exception:
+            logger.exception("Sleep-mode: failed to queue agent notification")
+    else:
+        context.add_message("user", text)
+
+
 def _make_llm_trigger_fn() -> "Callable[[], None]":
     """
     Create a sync no-arg callable that triggers an autonomous LLM call
     and pushes the result to Telegram via the registered chat sender.
     Called from daemon agent threads, so must be fully synchronous.
+    Suppressed during sleep mode — agent completions are queued instead.
     """
     def _trigger() -> None:
         try:
+            if user_status.is_sleeping():
+                logger.info("LLM trigger suppressed: sleep mode active")
+                return
             response = llm.run_triggered()
             if response:
                 sender = chat_bridge.get_sender()
@@ -421,9 +445,10 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     _message_count += 1
     _messages_since_last_memory += 1
 
-    # Track activity so the proactive dispatcher knows the user is awake
+    # Track activity (sleep mode is NOT cleared by user messages)
     user_status.update_activity(update.effective_chat.id)
     _proactive_loop = asyncio.get_event_loop()
+
     if _message_count % AUTO_MEMORY_EVERY == 0:
         history = context.get_history()
         transcript = "\n".join(
@@ -451,7 +476,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             update.message.reply_text(text[:4096]), _loop
         )
     )
-    chat_bridge.set_context_injector(lambda text: context.add_message("user", text))
+    chat_bridge.set_context_injector(_sleep_aware_context_injector)
     chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
     typing_task = asyncio.create_task(keep_typing())
@@ -507,7 +532,7 @@ async def cmd_agent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             update.message.reply_text(text[:4096]), _loop
         )
     )
-    chat_bridge.set_context_injector(lambda text: context.add_message("user", text))
+    chat_bridge.set_context_injector(_sleep_aware_context_injector)
     chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
     from agent import launch_agent

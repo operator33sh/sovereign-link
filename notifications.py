@@ -72,6 +72,15 @@ class _NotificationManager:
         if category not in _VALID_CATEGORIES:
             category = "insight"
 
+        # Check if we should hold this notification during sleep mode
+        held_for_sleep = False
+        if priority != "high":
+            try:
+                from proactive import user_status
+                held_for_sleep = user_status.is_sleeping()
+            except Exception:
+                pass
+
         entry = {
             "id": str(uuid.uuid4())[:8],
             "agent_id": agent_id,
@@ -81,6 +90,7 @@ class _NotificationManager:
             "content": content,
             "status": "pending",
             "related_file": related_file,
+            "held_for_sleep": held_for_sleep,
         }
 
         with self._lock:
@@ -137,6 +147,60 @@ class _NotificationManager:
 
         header = f"*{len(pending)} notificatie(s) terwijl je weg was:*\n\n"
         return header + "\n\n".join(lines)
+
+    def get_morning_briefing(self) -> str:
+        """Return a categorised morning briefing of all pending notifications.
+
+        Marks every returned notification as delivered atomically.
+        Returns a warm all-clear message when the queue is empty.
+        """
+        with self._lock:
+            entries = self._load()
+            pending = [e for e in entries if e["status"] == "pending"]
+
+            if not pending:
+                return "🌅 *Goedemorgen!* Niets gemist terwijl je sliep — je bent helemaal bijgewerkt. ☀️"
+
+            # Sort: high → medium → low, then chronological
+            pending.sort(key=lambda e: (
+                _PRIORITY_ORDER.get(e.get("priority", "medium"), 99),
+                e.get("timestamp", ""),
+            ))
+
+            # Mark delivered atomically
+            delivered_ids = {e["id"] for e in pending}
+            for e in entries:
+                if e["id"] in delivered_ids:
+                    e["status"] = "delivered"
+            self._save(entries)
+
+        _icon  = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+        _label = {"high": "Urgent", "medium": "Info", "low": "Laag"}
+
+        # Group by priority
+        groups: dict[str, list] = {"high": [], "medium": [], "low": []}
+        for e in pending:
+            groups.setdefault(e.get("priority", "medium"), []).append(e)
+
+        lines: list[str] = []
+        for prio in ("high", "medium", "low"):
+            items = groups.get(prio, [])
+            if not items:
+                continue
+            lines.append(f"*{_icon[prio]} {_label[prio]}*")
+            for e in items:
+                ts    = datetime.fromisoformat(e["timestamp"]).astimezone().strftime("%d-%m %H:%M")
+                agent = e.get("agent_id", "systeem")
+                body  = e.get("content", "")
+                line  = f"  • [{e.get('category', 'system').upper()}] *{agent}* ({ts}): {body}"
+                if e.get("related_file"):
+                    line += f"\n    → `{e['related_file']}`"
+                lines.append(line)
+
+        n = len(pending)
+        noun = "berichten" if n != 1 else "bericht"
+        header = f"🌅 *Goedemorgen! Je hebt {n} {noun} gemist:*\n\n"
+        return header + "\n".join(lines)
 
     def clear_delivered(self) -> str:
         """Prune delivered notifications to keep the file lean."""

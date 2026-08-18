@@ -15,6 +15,8 @@ EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 CHROMA_PATH = os.environ.get("CHROMA_PATH", os.path.expanduser("~/.sovereign-link/chroma"))
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
+AGENT_TEMP_DIR = ".agent_temp"  # transient working memory — never indexed
+
 CHUNK_SIZE = 1500   # ~375 tokens
 CHUNK_OVERLAP = 150
 DISTANCE_THRESHOLD = 0.8  # cosine distance above this = not relevant
@@ -54,6 +56,9 @@ def _chunk(text: str, file_name: str) -> list:
 
 
 def index_file(file_name: str, content: str, timestamp: str | None = None) -> None:
+    if file_name.startswith(AGENT_TEMP_DIR + "/") or file_name == AGENT_TEMP_DIR:
+        return  # transient working memory — never indexed
+
     if timestamp is None:
         timestamp = datetime.now().isoformat()
 
@@ -182,6 +187,8 @@ def _index_path(path: Path, event_type: str = "modified") -> None:
     vault = Path(VAULT_PATH)
     try:
         rel = str(path.relative_to(vault))
+        if rel.startswith(AGENT_TEMP_DIR + "/") or rel.startswith(AGENT_TEMP_DIR + "\\"):
+            return  # transient working memory — skip indexing
         content = path.read_text(encoding="utf-8")
         if content.strip():
             mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat()

@@ -172,43 +172,58 @@ def delete_file(file_path: str) -> str:
         return f"Error deleting file: {e}"
 
 
+def update_personality(updated_profile: str) -> str:
+    """Write an updated personality profile to vault via the personality module."""
+    from personality import update_personality as _update
+    return _update(updated_profile)
+
+
 def write_blackboard(project_id: str, fragment: str, label: str = "") -> str:
-    """Write an insight fragment to the shared blackboard for a swarm project."""
+    """Write an insight fragment to the swarm blackboard (transient — never indexed)."""
     ts = datetime.now().strftime("%H%M%S")
-    file_name = f"agents/blackboard/{project_id}/{label or 'fragment'}_{ts}.md"
-    return write_vault(file_name, fragment)
+    file_name = f"blackboard/{project_id}/{label or 'fragment'}_{ts}.md"
+    return write_temp(file_name, fragment)
 
 
 def read_blackboard(project_id: str) -> str:
     """Read all fragments posted to the blackboard by all peers."""
-    board_dir = os.path.join(VAULT_PATH, "agents", "blackboard", project_id)
+    board_dir = os.path.join(AGENT_TEMP_PATH, "blackboard", project_id)
     if not os.path.isdir(board_dir):
         return f"Blackboard '{project_id}' is empty or does not exist."
     fragments = []
     for fname in sorted(os.listdir(board_dir)):
         if fname.endswith(".md"):
-            content = read_vault(f"agents/blackboard/{project_id}/{fname}")
-            fragments.append(f"### {fname}\n{content}")
+            path = os.path.join(board_dir, fname)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    fragments.append(f"### {fname}\n{f.read()}")
+            except Exception:
+                pass
     return "\n\n---\n\n".join(fragments) if fragments else "Blackboard is empty."
 
 
 def send_signal(recipient: str, message: str, sender: str = "unknown") -> str:
-    """Send an async signal to another agent via the vault."""
+    """Send an async direct message to another agent (transient — never indexed)."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f"agents/signals/{recipient}_{ts}.md"
+    file_name = f"signals/{recipient}_{ts}.md"
     content = f"**From:** {sender}  \n**To:** {recipient}  \n**Time:** {ts}\n\n{message}"
-    return write_vault(file_name, content)
+    return write_temp(file_name, content)
 
 
 def read_signals(agent_name: str) -> str:
     """Read all pending signals addressed to this agent."""
-    sig_dir = os.path.join(VAULT_PATH, "agents", "signals")
+    sig_dir = os.path.join(AGENT_TEMP_PATH, "signals")
     if not os.path.isdir(sig_dir):
-        return "No signals."
+        return f"No signals for {agent_name}."
     signals = []
     for fname in sorted(os.listdir(sig_dir)):
         if fname.startswith(agent_name + "_") and fname.endswith(".md"):
-            signals.append(read_vault(f"agents/signals/{fname}"))
+            path = os.path.join(sig_dir, fname)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    signals.append(f.read())
+            except Exception:
+                pass
     return "\n\n---\n\n".join(signals) if signals else f"No signals for {agent_name}."
 
 
@@ -562,11 +577,42 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "update_personality",
+            "description": (
+                "Update Luna's personality profile stored in vault/.system/personality_profile.md. "
+                "Call this when the user explicitly asks to change Luna's personality, tone, or behaviour rules — "
+                "e.g. 'wees strenger', 'gebruik meer humor', 'spreek beknopter', 'voeg toe aan je profiel dat...'. "
+                "Read the current profile from the system prompt, apply the requested change, "
+                "bump the version number, add a versioning entry with today's date, "
+                "and pass the complete updated file content as 'updated_profile'. "
+                "The new personality takes effect on the very next message."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "updated_profile": {
+                        "type": "string",
+                        "description": (
+                            "The complete updated content of the personality profile in Markdown, "
+                            "including the frontmatter block with incremented version and updated last_updated date, "
+                            "all sections (Identiteit, Toon, Gedragsregels, Communicatiestijl, Huidige Evolutie), "
+                            "and an appended line in Versiegeschiedenis describing what changed."
+                        ),
+                    }
+                },
+                "required": ["updated_profile"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_blackboard",
             "description": (
-                "Write an insight fragment to the shared blackboard for a swarm project. "
+                "Write an insight fragment to the shared swarm blackboard (stored in .agent_temp/ — transient, never indexed). "
                 "Use this to post observations, hypotheses, or conclusions so peer agents can read them. "
-                "All agents in the same swarm share a single blackboard per project_id."
+                "All agents in the same swarm share a single blackboard per project_id. "
+                "NEVER use write_vault for inter-agent communication — always use write_blackboard."
             ),
             "parameters": {
                 "type": "object",
@@ -600,7 +646,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "send_signal",
-            "description": "Send an async direct message to a specific peer agent via the vault.",
+            "description": "Send an async direct message to a specific peer agent (stored in .agent_temp/ — transient, never indexed).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -805,8 +851,11 @@ TOOL_DEFINITIONS = [
             "name": "set_sleep_mode",
             "description": (
                 "Enable or disable sleep mode. In sleep mode, only high-priority notifications "
-                "are pushed proactively; medium and low notifications are held until the user returns. "
-                "Sleep mode is automatically cleared when the user sends any message."
+                "are pushed proactively; medium and low notifications are queued and held until "
+                "sleep mode is explicitly disabled. When disabling (sleeping=false), a Morning "
+                "Briefing is automatically generated with all missed notifications categorised by "
+                "priority. Sleep mode is a deliberate noise filter — it is NOT cleared automatically "
+                "when the user sends a message."
             ),
             "parameters": {
                 "type": "object",
@@ -1171,6 +1220,7 @@ TOOL_HANDLERS = {
     "get_agent_status": lambda args: _agent_status(args["agent_id"]),
     "list_agents": lambda args: _agent_list(),
     # Swarm tools
+    "update_personality": lambda args: update_personality(args["updated_profile"]),
     "write_blackboard": lambda args: write_blackboard(args["project_id"], args["fragment"], args.get("label", "")),
     "read_blackboard": lambda args: read_blackboard(args["project_id"]),
     "send_signal": lambda args: send_signal(args["recipient"], args["message"], args.get("sender", "unknown")),

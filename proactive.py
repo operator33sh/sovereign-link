@@ -73,14 +73,14 @@ class UserStatusManager:
     # ------------------------------------------------------------------
 
     def update_activity(self, chat_id: int | None = None) -> None:
-        """Call on every incoming user message.
+        """Call on every incoming user message to track last activity and chat_id.
 
-        Also clears sleep mode — any message means the user is awake.
+        Does NOT clear sleep_mode — sleep is a deliberate filter that only
+        the user can disable via set_sleep_mode(False) or an explicit command.
         """
         with self._lock:
             data = self._load()
             data["last_activity"] = datetime.now(timezone.utc).isoformat()
-            data["sleep_mode"] = False
             if chat_id is not None:
                 data["chat_id"] = chat_id
             self._save(data)
@@ -93,7 +93,14 @@ class UserStatusManager:
             self._save(data)
         if sleeping:
             return "Slaapstand ingeschakeld. Ik hou notificaties vast tot je terugkomt. 🌙"
-        return "Slaapstand uitgeschakeld. Ik ben weer actief. ☀️"
+        # On wake: generate and return morning briefing automatically
+        try:
+            from notifications import notification_manager
+            briefing = notification_manager.get_morning_briefing()
+        except Exception:
+            logger.exception("UserStatusManager: failed to generate morning briefing")
+            briefing = "☀️ Slaapstand uitgeschakeld."
+        return "☀️ *Slaapstand uitgeschakeld.*\n\n" + briefing
 
     def get_chat_id(self) -> int | None:
         cid = self._load().get("chat_id")
