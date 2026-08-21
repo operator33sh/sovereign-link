@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 _VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 _AUTOMATIONS_PATH = os.path.join(_VAULT_PATH, ".system", "automations.json")
-_LOGS_PATH = os.path.join(_VAULT_PATH, ".system", "automation_logs.json")
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_LOGS_PATH = os.path.join(_PROJECT_ROOT, "logs", "automation_logs.json")
 _POLL_INTERVAL = 60  # seconds
 _MAX_LOG_ENTRIES = 500
 

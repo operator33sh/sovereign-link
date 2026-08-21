@@ -18,11 +18,18 @@ from datetime import datetime
 _AGENT_MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", 50))
 _AGENT_LLM_TIMEOUT = float(os.environ.get("AGENT_LLM_TIMEOUT", 180.0))
 _AGENT_SWARM_SIZE = int(os.environ.get("AGENT_SWARM_SIZE", 5))
+_SWARM_AGENT_TIMEOUT = int(os.environ.get("SWARM_AGENT_TIMEOUT", 300))   # 5 min watchdog
+_SWARM_MAX_RETRIES = int(os.environ.get("SWARM_MAX_RETRIES", 3))
 
-from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH
+_RETRY_CONTEXT_PREFIX = (
+    "Vorige poging is getimed uit. Analyseer het blackboard om te zien waar de "
+    "blokkade zat en probeer een alternatieve route naar het doel."
+)
+
+from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH, PROJECT_LOGS_PATH
 
 # Execution logs — outside the vault, never indexed or synced
-LOGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+LOGS_PATH = os.path.join(PROJECT_LOGS_PATH, "agents")
 
 # ------------------------------------------------------------------
 # Global agent registry — thread-safe
@@ -449,7 +456,12 @@ class SwarmCoordinator:
         self.project_id = project_id
         self.swarm_size = swarm_size
         self._lock = threading.Lock()
-        self._peers: dict[str, dict] = {}  # agent_id → {thread, agent, role}
+        # agent_id → {thread, agent, role, goal, start_time, retry_count, retry_key, watchdog_triggered}
+        self._peers: dict[str, dict] = {}
+        # retry_key (role) → count of attempts used
+        self._retry_counts: dict[str, int] = {}
+        # retry_keys that have exhausted all retries
+        self._permanently_failed: set[str] = set()
         self._swarm_id = f"swarm_{project_id}_{datetime.now().strftime('%H%M%S')}"
         self.context_injector = None
         self.llm_trigger = None
@@ -462,11 +474,16 @@ class SwarmCoordinator:
         monitor.start()
         return self._swarm_id
 
-    def add_peer(self, goal: str, role: str) -> str:
+    def add_peer(self, goal: str, role: str, retry_key: str | None = None,
+                 retry_count: int = 0) -> str:
+        """Spawn a peer agent. retry_key groups retries under the same logical slot."""
         with self._lock:
-            if len(self._peers) >= self.swarm_size:
+            active = sum(1 for p in self._peers.values() if p["thread"].is_alive())
+            if active >= self.swarm_size:
                 return f"Swarm size limit ({self.swarm_size}) reached — peer not spawned."
             agent_name = f"{role}_{datetime.now().strftime('%H%M%S')}"
+            if retry_key is None:
+                retry_key = role
 
         agent = SwarmAgent(
             goal=goal,
@@ -487,28 +504,147 @@ class SwarmCoordinator:
 
         t = threading.Thread(target=_run, daemon=True, name=agent_id)
         with self._lock:
-            self._peers[agent_id] = {"thread": t, "agent": agent, "role": role}
+            self._peers[agent_id] = {
+                "thread": t,
+                "agent": agent,
+                "role": role,
+                "goal": goal,
+                "start_time": time.monotonic(),
+                "retry_count": retry_count,
+                "retry_key": retry_key,
+                "watchdog_triggered": False,
+            }
         t.start()
         return f"Peer '{agent_name}' ({role}) spawned in swarm '{self._swarm_id}'."
 
     def _monitor(self):
-        """Poll until all peers finish, then spawn SynthesisAgent."""
+        """Watchdog loop: detects timeouts, triggers retries, spawns SynthesisAgent when settled."""
+        from tools import write_blackboard  # local import to avoid circular deps
+
         while True:
             time.sleep(10)
+
             with self._lock:
-                all_done = all(not p["thread"].is_alive() for p in self._peers.values())
-            if all_done:
+                peers_snapshot = dict(self._peers)
+
+            now = time.monotonic()
+            for agent_id, info in peers_snapshot.items():
+                if info["watchdog_triggered"]:
+                    continue
+
+                thread_alive = info["thread"].is_alive()
+                elapsed = now - info["start_time"]
+
+                if thread_alive and elapsed >= _SWARM_AGENT_TIMEOUT:
+                    # Watchdog fires — thread has been running too long
+                    with self._lock:
+                        self._peers[agent_id]["watchdog_triggered"] = True
+                    _update_registry(agent_id, "timeout",
+                                     f"Watchdog: timed out after {_SWARM_AGENT_TIMEOUT}s")
+                    self._handle_agent_failure(agent_id, info, "timeout", write_blackboard)
+
+                elif not thread_alive:
+                    # Thread finished — check if it failed (no GOAL_COMPLETE)
+                    with _registry_lock:
+                        reg = _registry.get(agent_id, {})
+                    reg_status = reg.get("status", "")
+                    if reg_status in ("failed", "timeout") and info["retry_key"] not in self._permanently_failed:
+                        with self._lock:
+                            self._peers[agent_id]["watchdog_triggered"] = True
+                        self._handle_agent_failure(agent_id, info, reg_status, write_blackboard)
+
+            if self._all_settled():
                 self._synthesize()
                 break
 
+    def _handle_agent_failure(self, agent_id: str, info: dict,
+                               reason: str, write_blackboard_fn) -> None:
+        """Retry a failed/timed-out peer, or mark it permanently failed."""
+        retry_key = info["retry_key"]
+        retry_count = info["retry_count"] + 1
+
+        # Write SYSTEM_RETRY signal to blackboard
+        signal = (
+            f"[SYSTEM_RETRY] Agent {info['agent'].agent_name} herstart vanwege {reason}. "
+            f"Analyse van blokkade gestart. (Poging {retry_count}/{_SWARM_MAX_RETRIES})"
+        )
+        try:
+            write_blackboard_fn(self.project_id, signal, label="SYSTEM_RETRY")
+        except Exception:
+            logger.exception("SwarmCoordinator: failed to write SYSTEM_RETRY to blackboard")
+
+        if retry_count > _SWARM_MAX_RETRIES:
+            logger.warning(
+                "SwarmCoordinator: agent %s exhausted %d retries — marking permanently failed",
+                info["agent"].agent_name, _SWARM_MAX_RETRIES,
+            )
+            with self._lock:
+                self._permanently_failed.add(retry_key)
+            return
+
+        logger.info(
+            "SwarmCoordinator: retrying %s (attempt %d/%d)",
+            info["agent"].agent_name, retry_count, _SWARM_MAX_RETRIES,
+        )
+        retry_goal = f"{_RETRY_CONTEXT_PREFIX}\n\nOrigineel doel: {info['goal']}"
+        self.add_peer(retry_goal, info["role"],
+                      retry_key=retry_key, retry_count=retry_count)
+
+    def _all_settled(self) -> bool:
+        """True when every peer slot is either completed or permanently failed."""
+        with self._lock:
+            # Group peers by retry_key and find the latest attempt for each slot
+            slots: dict[str, list] = {}
+            for info in self._peers.values():
+                slots.setdefault(info["retry_key"], []).append(info)
+
+            for retry_key, attempts in slots.items():
+                if retry_key in self._permanently_failed:
+                    continue  # this slot is done (exhausted retries)
+                # Find the most recent attempt (highest retry_count)
+                latest = max(attempts, key=lambda x: x["retry_count"])
+                if latest["thread"].is_alive():
+                    return False  # still running
+                # Thread is done — if it succeeded we're good; if failed, retry was queued
+                with _registry_lock:
+                    reg = _registry.get(latest["agent"].agent_name, {})
+                if reg.get("status") not in ("completed",):
+                    # Failed and not permanently failed — retry should have been queued,
+                    # but if retry_key not in permanently_failed the retry peer should exist
+                    if not any(
+                        i["retry_key"] == retry_key and i["thread"].is_alive()
+                        for i in self._peers.values()
+                    ):
+                        # No active retry thread and not permanently failed yet —
+                        # the failure handler hasn't run yet; not settled
+                        return False
+
+            return True
+
     def _synthesize(self):
+        with self._lock:
+            failed_roles = list(self._permanently_failed)
+
+        failure_note = ""
+        if failed_roles:
+            for role in failed_roles:
+                failure_note += (
+                    f" Agent {role} is na {_SWARM_MAX_RETRIES} pogingen gefaald; "
+                    f"resultaten zijn gebaseerd op de resterende peers."
+                )
+
+        swarms_dir = os.path.join(PROJECT_LOGS_PATH, "swarms")
+        os.makedirs(swarms_dir, exist_ok=True)
+        synthesis_path = os.path.join(swarms_dir, f"{self.project_id}_synthesis.md")
+
         synthesis_goal = (
             f"Read the full blackboard for project '{self.project_id}' using "
             f"read_blackboard with project_id='{self.project_id}'. "
             f"Synthesize all peer findings into a coherent conclusion. "
-            f"Resolve contradictions, identify emergent patterns, and write the final synthesis to "
-            f"'agents/reports/{self.project_id}_synthesis.md'. "
-            f"Then declare GOAL_COMPLETE."
+            f"Resolve contradictions, identify emergent patterns, and write the final synthesis "
+            f"using write_temp with file_name='swarm_synthesis/{self.project_id}_synthesis.md'."
+            + (f" IMPORTANT NOTE: {failure_note}" if failure_note else "")
+            + " Then declare GOAL_COMPLETE."
         )
         agent = BackgroundAgent(
             goal=synthesis_goal,
@@ -516,7 +652,18 @@ class SwarmCoordinator:
             context_injector=self.context_injector,
             llm_trigger=self.llm_trigger,
         )
-        agent.run()
+        result = agent.run()
+
+        # Copy the synthesis from agent_temp to logs/swarms/ for permanent process record
+        try:
+            import shutil
+            temp_synthesis = os.path.join(AGENT_TEMP_PATH, "swarm_synthesis",
+                                          f"{self.project_id}_synthesis.md")
+            if os.path.exists(temp_synthesis):
+                shutil.copy2(temp_synthesis, synthesis_path)
+                logger.info("SwarmCoordinator: synthesis copied to %s", synthesis_path)
+        except Exception:
+            logger.exception("SwarmCoordinator: failed to copy synthesis to logs/swarms/")
 
 
 # ------------------------------------------------------------------

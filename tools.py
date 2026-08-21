@@ -12,6 +12,19 @@ logger = logging.getLogger(__name__)
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 AGENT_TEMP_PATH = os.path.join(VAULT_PATH, ".agent_temp")
 
+# Project-level log root — execution/process data lives here, never in the vault
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_LOGS_PATH = os.path.join(PROJECT_ROOT, "logs")
+
+# Filename keywords that trigger automatic redirect from vault → logs/
+_VAULT_LOG_KEYWORDS = ("log", "execution", "synthesis")
+
+
+def _is_log_filename(file_name: str) -> bool:
+    """Return True if the filename (stem) contains a log-related keyword."""
+    stem = os.path.splitext(os.path.basename(file_name))[0].lower()
+    return any(kw in stem for kw in _VAULT_LOG_KEYWORDS)
+
 
 def generate_time_tag() -> str:
     """Return a chronological search tag for the current month, e.g. '#2026-08'."""
@@ -32,6 +45,22 @@ def read_vault(file_name: str) -> str:
 
 
 def write_vault(file_name: str, content: str, timestamp: str | None = None) -> str:
+    # Guard: redirect log/execution/synthesis files away from the vault
+    if _is_log_filename(file_name):
+        safe_name = os.path.basename(file_name)
+        redirect_path = os.path.join(PROJECT_LOGS_PATH, "redirected", safe_name)
+        try:
+            os.makedirs(os.path.dirname(redirect_path), exist_ok=True)
+            with open(redirect_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            return f"Error writing redirected log file: {e}"
+        logger.info("write_vault: redirected '%s' → logs/redirected/%s", file_name, safe_name)
+        return (
+            f"[VAULT REDIRECT] '{file_name}' contains a process-log keyword and was "
+            f"automatically redirected to 'logs/redirected/{safe_name}' (not written to vault)."
+        )
+
     path = os.path.join(VAULT_PATH, file_name)
     if not os.path.realpath(path).startswith(os.path.realpath(VAULT_PATH)):
         return "Error: path traversal not allowed"

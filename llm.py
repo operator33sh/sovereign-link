@@ -71,6 +71,26 @@ _VAULT_PROMPT = (
     "- References a previous conversation or insight\n"
     "Search first, answer second. Never guess from chat context alone.\n\n"
 
+    "## Active Context Layer (ACL)\n"
+    "In addition to the Vault (Long-term) and the Chat Buffer (Short-term), you operate with an "
+    "Active Context Layer (ACL). The ACL is a high-priority briefing file located at "
+    "`.system/active_briefing.md` in the vault.\n\n"
+    "**ACL Operational Protocol:**\n"
+    "1. **Priority of Truth:** The ACL, when present, takes precedence over general chat context and "
+    "serves as the primary filter for your tone, behaviour, and current assumptions about the user's state. "
+    "If the ACL has been injected into this session (visible below as the '🔴 Active Context Layer' block), "
+    "apply it immediately.\n"
+    "2. **Dynamic Updating:** Whenever the user establishes a 'Current Truth' — a parameter more important "
+    "than transient context but not yet a permanent vault record — proactively suggest updating the ACL. "
+    "With user confirmation, use `write_vault` to update `.system/active_briefing.md`. "
+    "Always preserve the existing structure (Mentale Staat, Beperkingen, Definities, Focuspunten) and "
+    "update the '_Last updated_' timestamp.\n"
+    "3. **Content Focus:** The ACL should strictly contain:\n"
+    "   - Current mental/emotional state (e.g. 'Landing Phase', 'Scherp en gefocust')\n"
+    "   - Immediate operational constraints (e.g. 'Vermijd diepe simulatie-analyse')\n"
+    "   - High-priority definitions (e.g. 'Thuis = The Void')\n"
+    "   - Active focal points (e.g. 'Grim Dawn: Fire Paladin', 'Vault reorganisatie')\n\n"
+
     "## Chronological Search Tags\n"
     "Every vault entry (SovereignLog and manual notes) is tagged with #YYYY-MM (e.g. #2026-08) "
     "directly after the timestamp. Use these tags to filter for recency. "
@@ -102,6 +122,35 @@ _VAULT_PROMPT = (
     "After fetching a page, summarize the key points before offering to save them to the vault. "
     "Be concise and direct."
 )
+
+
+_VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
+
+
+def _load_acl() -> str:
+    """Load the Active Context Layer from .system/active_briefing.md in the vault.
+
+    Returns an empty string if the file is missing or empty, otherwise returns
+    a formatted high-priority section to be appended to the system prompt.
+    """
+    acl_path = os.path.join(_VAULT_PATH, ".system", "active_briefing.md")
+    try:
+        with open(acl_path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            return (
+                "\n\n---\n\n"
+                "## 🔴 Active Context Layer (ACL) — Highest Priority\n\n"
+                "The following briefing overrides general context assumptions about the user's current "
+                "state, tone, and operational constraints. Apply it as the primary filter for this session "
+                "before any other contextual inference.\n\n"
+                + content
+            )
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return ""
 
 
 _NIGHT_MODE_ADDENDUM = """
@@ -143,6 +192,7 @@ def _build_system_prompt() -> str:
             + _PERSONALITY_DIRECTIVE
             + "\n\n---\n\n"
             + _VAULT_PROMPT
+            + _load_acl()
         )
 
     try:
