@@ -286,7 +286,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     photo = update.message.photo[-1]  # largest available size
     caption = update.message.caption or ""
-    logger.info("Received photo file_id=%s caption=%r", photo.file_id, caption[:80])
+
 
     status = await update.message.reply_text("Processing image...")
 
@@ -354,16 +354,12 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             tg_file_id = audio.file_id
             extension = os.path.splitext(audio.file_name or ".mp3")[1] or ".mp3"
 
-        logger.info("Received audio file_id=%s ext=%s", tg_file_id, extension)
-
         os.makedirs(AUDIO_TMP_DIR, exist_ok=True)
         tg_file = await ctx.bot.get_file(tg_file_id)
         tmp_path = os.path.join(AUDIO_TMP_DIR, f"{tg_file_id}{extension}")
         await tg_file.download_to_drive(tmp_path)
 
         transcription = await asyncio.to_thread(llm.transcribe_audio, tmp_path)
-        logger.info("Transcription: %s", transcription[:120])
-
         try:
             os.remove(tmp_path)
         except Exception:
@@ -471,7 +467,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         asyncio.create_task(_auto_memory_background(update, transcript))
 
     user_text = update.message.text
-    logger.info("Received message: %s", user_text[:80])
 
     async def keep_typing():
         while True:
