@@ -17,11 +17,22 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_LOGS_PATH = os.path.join(PROJECT_ROOT, "logs")
 
 # Filename keywords that trigger automatic redirect from vault → logs/
-_VAULT_LOG_KEYWORDS = ("log", "execution", "synthesis")
+# Only applies to bare root-level filenames — any path with a directory
+# component (e.g. memory/SovereignLog.md, Conversaties/Sessie.md) is an
+# intentional vault write and is never redirected.
+_VAULT_LOG_KEYWORDS = ("execution", "synthesis")
 
 
 def _is_log_filename(file_name: str) -> bool:
-    """Return True if the filename (stem) contains a log-related keyword."""
+    """Return True if the file should be redirected away from the vault.
+
+    Only bare filenames at the vault root containing process-log keywords are
+    redirected.  Any path with a '/' (i.e. organised into a subdirectory) is
+    an intentional vault write — memory logs, session logs, and SovereignLog
+    files all live in subdirectories and must never be redirected.
+    """
+    if "/" in file_name or os.sep in file_name:
+        return False
     stem = os.path.splitext(os.path.basename(file_name))[0].lower()
     return any(kw in stem for kw in _VAULT_LOG_KEYWORDS)
 

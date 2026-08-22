@@ -18,6 +18,7 @@ from tools import write_vault, sync_vault, generate_time_tag
 from memory_manager import run_memory_pipeline
 from agent import run_system_check
 import chat_bridge
+from session_logger import session_logger
 from scheduler import scheduler as _scheduler
 from automations import automation_engine as _automation_engine
 from proactive import user_status, proactive_dispatcher
@@ -37,7 +38,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 
-AUTO_MEMORY_EVERY = 20  # trigger memory pipeline every N user messages
+AUTO_MEMORY_EVERY = 10  # trigger memory pipeline every N user messages
 _message_count = 0
 _messages_since_last_memory = 0
 
@@ -388,6 +389,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
         await update.message.reply_text(_strip_timestamps(reply))
         _save_session_draft()
+        session_logger.on_turn(context.get_history())
 
     except Exception as e:
         logger.exception("Audio transcription error")
@@ -457,7 +459,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     user_status.update_activity(update.effective_chat.id)
     _proactive_loop = asyncio.get_event_loop()
 
-    if _message_count % AUTO_MEMORY_EVERY == 0:
+    if _messages_since_last_memory >= AUTO_MEMORY_EVERY:
         history = context.get_history()
         transcript = "\n".join(
             f"{m['role'].upper()}: {m.get('content', '')}"
@@ -497,6 +499,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
     await update.message.reply_text(_strip_timestamps(reply))
     _save_session_draft()
+    session_logger.on_turn(context.get_history())
 
 
 async def _run_syscheck_background(update: Update) -> None:
@@ -633,6 +636,10 @@ async def _on_shutdown(app: Application) -> None:
         logger.info("Shutdown memory saved: %s", result["file_name"])
     except Exception:
         logger.exception("Shutdown memory pipeline failed")
+
+    # Deterministic fallback: flush raw session snapshot regardless of whether
+    # the LLM-based memory pipeline succeeded.
+    session_logger.force_flush(context.get_history(), reason="shutdown")
 
 
 def build_app() -> Application:
