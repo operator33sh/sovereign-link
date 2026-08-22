@@ -90,7 +90,13 @@ def ingest_all() -> None:
 
         index_file(rel, content, mtime)
 
-    print("\nDone! Vault fully indexed.")
+        try:
+            from timeline import index_file as _timeline_index
+            _timeline_index(rel, content, mtime)
+        except Exception as e:
+            print(f"[{i}/{len(md_files)}]   ⚠ timeline index failed: {e}")
+
+    print("\nDone! Vault fully indexed (ChromaDB + SQLite timeline).")
 
 
 if __name__ == "__main__":

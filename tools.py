@@ -92,6 +92,12 @@ def write_vault(file_name: str, content: str, timestamp: str | None = None) -> s
     except Exception:
         logger.exception("write_vault: failed to index %s", file_name)
 
+    try:
+        from timeline import index_file as _timeline_index
+        _timeline_index(file_name, tagged_content, timestamp or datetime.now().isoformat())
+    except Exception:
+        logger.exception("write_vault: timeline indexing failed for %s", file_name)
+
     return f"Written successfully to '{file_name}'"
 
 
@@ -244,6 +250,43 @@ def delete_file(file_path: str) -> str:
         return f"Deleted '{file_path}'"
     except Exception as e:
         return f"Error deleting file: {e}"
+
+
+def search_timeline(
+    query: str | None = None,
+    date: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    n: int = 5,
+) -> str:
+    """Search the SQLite timeline index by date and/or full-text query.
+
+    Use this for date-based retrieval of session transcripts and memory files.
+    Prefer search_vault_semantic for topic-based searches without a specific date.
+    """
+    from timeline import search_by_date, search_by_range
+
+    if date_from and date_to:
+        rows = search_by_range(date_from, date_to, query=query, n=n)
+        label = f"{date_from} – {date_to}"
+    elif date:
+        rows = search_by_date(date, query=query, n=n)
+        label = date
+    else:
+        return "Geef minimaal een 'date' (YYYY-MM-DD) of 'date_from'+'date_to' op."
+
+    if not rows:
+        q_info = f" met query '{query}'" if query else ""
+        return f"Geen resultaten gevonden voor {label}{q_info}."
+
+    parts = []
+    for row in rows:
+        fp = row["file_path"]
+        ts = row.get("datetime_iso", "")
+        header = f"[{fp} | {ts}]" if ts else f"[{fp}]"
+        parts.append(f"{header}\n{row.get('snippet', '')}")
+
+    return "\n\n---\n\n".join(parts)
 
 
 def update_personality(updated_profile: str) -> str:
@@ -1273,6 +1316,45 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "search_timeline",
+            "description": (
+                "Search the SQLite timeline index for session transcripts and memory notes by date and/or keyword. "
+                "Use this — NOT search_vault_semantic — when the user asks about a specific date or period "
+                "(e.g. 'wat bespraken we gisteren?', 'overzicht van 20-23 augustus'). "
+                "Supports exact date, date range, and optional full-text filtering. "
+                "Returns file paths, timestamps, and content snippets sorted chronologically."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional keyword(s) to filter results by content (full-text search).",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Exact date to search (YYYY-MM-DD). Use this for single-day lookups.",
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Start of date range (YYYY-MM-DD, inclusive). Combine with date_to.",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "End of date range (YYYY-MM-DD, inclusive). Combine with date_from.",
+                    },
+                    "n": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return. Default: 5.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_vault_semantic",
             "description": (
                 "Semantic search across the entire fractalisme vault using vector embeddings. "
@@ -1312,6 +1394,13 @@ TOOL_HANDLERS = {
     "list_files": lambda args: list_files(args.get("directory", "")),
     "move_file": lambda args: move_file(args["source_path"], args["destination_path"]),
     "delete_file": lambda args: delete_file(args["file_path"]),
+    "search_timeline": lambda args: search_timeline(
+        query=args.get("query"),
+        date=args.get("date"),
+        date_from=args.get("date_from"),
+        date_to=args.get("date_to"),
+        n=args.get("n", 5),
+    ),
     "search_vault_semantic": lambda args: _search_vault_semantic(args["query"]),
     "analyze_website": lambda args: analyze_website(args["url"]),
     "browser_navigate": lambda args: _browser_navigate(args["url"], args.get("session_id", "default")),

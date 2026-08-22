@@ -191,31 +191,26 @@ def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | Non
     clean_query, date_filter, has_topic = _extract_date_filter(query)
     where_clause = _build_where(date_filter, path_prefix)
 
-    # --- Date-only query: pure metadata lookup, no semantic scoring ---
+    # --- Date-only query: delegate to SQLite timeline (reliable date index) ---
     if date_filter and not has_topic:
-        get_kwargs: dict = {"include": ["documents", "metadatas"]}
-        if where_clause:
-            get_kwargs["where"] = where_clause
         try:
-            raw = _collection.get(**get_kwargs)
+            from timeline import search_by_date
+            rows = search_by_date(date_filter, query=None, n=n_results)
         except Exception:
-            logger.exception("search_vault_semantic: date-only get() failed")
-            return "Fout bij ophalen van datum-gefilterde resultaten."
+            logger.exception("search_vault_semantic: timeline date-only lookup failed")
+            rows = []
 
-        docs = raw.get("documents", [])
-        metas = raw.get("metadatas", [])
-        if not docs:
+        if not rows:
             return f"Geen fragmenten gevonden voor {date_filter}."
 
         parts = []
-        for doc, meta in zip(docs[:n_results * 3], metas):  # cap output
-            if path_prefix and not meta.get("file_name", "").startswith(path_prefix):
+        for row in rows:
+            fp = row["file_path"]
+            if path_prefix and not fp.startswith(path_prefix):
                 continue
-            ts = meta.get("timestamp", "")
-            header = f"[{meta['file_name']} | {ts}]" if ts else f"[{meta['file_name']}]"
-            parts.append(f"{header}\n{doc}")
-            if len(parts) >= n_results:
-                break
+            ts = row.get("datetime_iso", "")
+            header = f"[{fp} | {ts}]" if ts else f"[{fp}]"
+            parts.append(f"{header}\n{row.get('snippet', '')}")
 
         if not parts:
             return f"Geen fragmenten gevonden voor {date_filter}."
