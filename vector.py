@@ -15,7 +15,8 @@ EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 CHROMA_PATH = os.environ.get("CHROMA_PATH", os.path.expanduser("~/.sovereign-link/chroma"))
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
-AGENT_TEMP_DIR = ".agent_temp"  # transient working memory — never indexed
+AGENT_TEMP_DIR = ".agent_temp"    # transient working memory — never indexed
+SYSTEM_MEMORY_DIR = "system_memory"  # project-root system files — never indexed
 
 CHUNK_SIZE = 1500   # ~375 tokens
 CHUNK_OVERLAP = 150

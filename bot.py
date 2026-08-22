@@ -30,6 +30,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Silence chatty HTTP client loggers — every LLM/embed call otherwise floods the console
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 
@@ -37,7 +41,9 @@ AUTO_MEMORY_EVERY = 20  # trigger memory pipeline every N user messages
 _message_count = 0
 _messages_since_last_memory = 0
 
-SESSION_DRAFT_PATH = "memory/session_draft.md"
+SESSION_DRAFT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "system_memory", "session_draft.md"
+)
 
 # Stored by handle_message so the proactive dispatcher can push messages
 # even when no active handler is running.
@@ -45,7 +51,11 @@ _proactive_loop: "asyncio.AbstractEventLoop | None" = None
 
 
 def _save_session_draft() -> None:
-    """Write raw conversation transcript to vault as a crash-safe draft."""
+    """Write raw conversation transcript to system_memory as a crash-safe draft.
+
+    Written directly to the filesystem (not via write_vault) so it is never
+    indexed by the VectorDB pipeline.
+    """
     history = context.get_history()
     if not history:
         return
@@ -53,17 +63,19 @@ def _save_session_draft() -> None:
     for m in history:
         if m.get("content") and isinstance(m["content"], str):
             lines.append(f"**{m['role'].upper()}:** {m['content']}\n")
-    write_vault(SESSION_DRAFT_PATH, "\n".join(lines))
+    try:
+        os.makedirs(os.path.dirname(SESSION_DRAFT_PATH), exist_ok=True)
+        with open(SESSION_DRAFT_PATH, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except Exception:
+        pass
 
 
 def _delete_session_draft() -> None:
     """Remove the session draft after a proper memory save."""
-    import os
-    from vector import VAULT_PATH
-    path = os.path.join(VAULT_PATH, SESSION_DRAFT_PATH)
     try:
-        if os.path.exists(path):
-            os.remove(path)
+        if os.path.exists(SESSION_DRAFT_PATH):
+            os.remove(SESSION_DRAFT_PATH)
     except Exception:
         pass
 
