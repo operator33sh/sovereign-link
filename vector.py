@@ -81,6 +81,8 @@ def index_file(file_name: str, content: str, timestamp: str | None = None) -> No
         documents=[c["text"] for c in chunks],
         metadatas=[c["metadata"] for c in chunks],
     )
+    with _recently_indexed_lock:
+        _recently_indexed[file_name] = time.time()
 
 
 def random_chunk() -> str | None:
@@ -182,6 +184,11 @@ _watcher_started = False
 _watcher_lock = threading.Lock()
 _debounce_delay = 2.0  # seconds to wait after last event before indexing
 
+# Suppress duplicate watcher events for files already indexed by write_vault()
+_recently_indexed: dict[str, float] = {}
+_recently_indexed_lock = threading.Lock()
+_recently_indexed_ttl = _debounce_delay + 1.0  # skip watcher if indexed within this window
+
 
 def _index_path(path: Path, event_type: str = "modified") -> None:
     """Index a single vault file by its absolute path."""
@@ -190,6 +197,10 @@ def _index_path(path: Path, event_type: str = "modified") -> None:
         rel = str(path.relative_to(vault))
         if rel.startswith(AGENT_TEMP_DIR + "/") or rel.startswith(AGENT_TEMP_DIR + "\\"):
             return  # transient working memory — skip indexing
+        with _recently_indexed_lock:
+            last = _recently_indexed.get(rel, 0.0)
+        if time.time() - last < _recently_indexed_ttl:
+            return  # already indexed by write_vault() — skip duplicate watcher event
         content = path.read_text(encoding="utf-8")
         if content.strip():
             mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat()

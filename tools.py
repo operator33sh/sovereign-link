@@ -156,6 +156,35 @@ def cleanup_transient_data(agent_id: str) -> str:
         return f"Error during cleanup: {e}"
 
 
+def commit_to_vault(temp_file_name: str, vault_file_name: str) -> str:
+    """Promote a finalized file from .agent_temp/ to the vault.
+
+    Reads the temp file, writes it to the vault via write_vault() (which
+    applies timestamp tags and indexes it), then removes the temp file.
+    """
+    temp_path = os.path.join(AGENT_TEMP_PATH, temp_file_name)
+    if not os.path.realpath(temp_path).startswith(os.path.realpath(AGENT_TEMP_PATH)):
+        return "Error: path traversal not allowed"
+    if not os.path.exists(temp_path):
+        return f"Error: temp file '{temp_file_name}' not found in .agent_temp/"
+    try:
+        with open(temp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        return f"Error reading temp file: {e}"
+
+    result = write_vault(vault_file_name, content)
+    if result.startswith("Error"):
+        return result
+
+    try:
+        os.remove(temp_path)
+    except Exception:
+        pass
+
+    return f"Committed '{temp_file_name}' → vault '{vault_file_name}' (tagged & indexed)"
+
+
 def list_files(directory: str = "") -> str:
     target = os.path.join(VAULT_PATH, directory) if directory else VAULT_PATH
     real_target = os.path.realpath(target)
@@ -1137,6 +1166,34 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "commit_to_vault",
+            "description": (
+                "Promote a finalized draft from .agent_temp/ to the Sovereign Vault. "
+                "Use this as the explicit 'publish' step: it reads the temp file, "
+                "applies the mandatory #YYYY-MM-DD #HH #MM timestamp tags, writes it "
+                "to the vault (indexed by VectorDB), and deletes the temp file. "
+                "NEVER use write_vault directly for content that started as a draft — "
+                "always go through write_temp → (refine) → commit_to_vault."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "temp_file_name": {
+                        "type": "string",
+                        "description": "Relative path of the source file within .agent_temp/ (e.g. 'agent42/draft_note.md').",
+                    },
+                    "vault_file_name": {
+                        "type": "string",
+                        "description": "Destination path in the vault (e.g. 'memory/2026-08-23_Reflectie.md').",
+                    },
+                },
+                "required": ["temp_file_name", "vault_file_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_files",
             "description": (
                 "Recursively list all files in a vault directory. "
@@ -1240,6 +1297,7 @@ TOOL_HANDLERS = {
     "write_temp": lambda args: write_temp(args["file_name"], args["content"]),
     "read_temp": lambda args: read_temp(args["file_name"]),
     "cleanup_transient_data": lambda args: cleanup_transient_data(args["agent_id"]),
+    "commit_to_vault": lambda args: commit_to_vault(args["temp_file_name"], args["vault_file_name"]),
     "list_files": lambda args: list_files(args.get("directory", "")),
     "move_file": lambda args: move_file(args["source_path"], args["destination_path"]),
     "delete_file": lambda args: delete_file(args["file_path"]),
