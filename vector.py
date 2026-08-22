@@ -153,21 +153,14 @@ def _extract_date_filter(query: str) -> tuple[str, str | None, bool]:
 def _build_where(date_filter: str | None, path_prefix: str | None) -> dict | None:
     """Build a ChromaDB where clause from optional date and path filters.
 
-    Date filter uses ISO string range comparison: timestamp >= YYYY-MM-DD
-    and timestamp < YYYY-MM-DD+1day, which works because ISO strings sort
-    lexicographically (no $contains needed, avoids version compatibility issues).
+    ChromaDB string metadata only supports $eq/$ne/$in/$nin and $contains.
+    $gte/$lt require numeric values, so we use $contains for date matching.
+    The timestamp field is stored as an ISO string (e.g. '2026-08-23T14:30:00'),
+    so $contains on 'YYYY-MM-DD' reliably matches all chunks from that date.
     """
     conditions = []
     if date_filter:
-        # ISO range: "2026-08-23" <= timestamp < "2026-08-24"
-        next_day = (
-            datetime.strptime(date_filter, "%Y-%m-%d")
-            .replace(hour=0, minute=0, second=0)
-        )
-        from datetime import timedelta
-        next_day_str = (next_day + timedelta(days=1)).strftime("%Y-%m-%d")
-        conditions.append({"timestamp": {"$gte": date_filter}})
-        conditions.append({"timestamp": {"$lt": next_day_str}})
+        conditions.append({"timestamp": {"$contains": date_filter}})
     if path_prefix:
         conditions.append({"file_name": {"$contains": path_prefix}})
 
