@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -129,8 +130,33 @@ def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None =
     return files
 
 
+_DATE_TAG_RE = re.compile(r"#(\d{4}-\d{2}-\d{2})")
+_HOUR_TAG_RE = re.compile(r"#(\d{2})(?=\s|$)")
+
+
+def _extract_date_filter(query: str) -> tuple[str, str | None]:
+    """Parse #YYYY-MM-DD tag from query string.
+
+    Returns (cleaned_query, date_string_or_None).  The date string is used
+    as a metadata substring filter on the 'timestamp' field (ISO format),
+    so '#2026-08-23' matches any timestamp starting with '2026-08-23'.
+    The tag is stripped from the query so the embedding is not polluted.
+    """
+    m = _DATE_TAG_RE.search(query)
+    if not m:
+        return query, None
+    date_str = m.group(1)
+    clean = _DATE_TAG_RE.sub("", query).strip()
+    return clean or date_str, date_str  # keep date as fallback query if nothing left
+
+
 def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | None = None) -> str:
     """Semantic search returning formatted text chunks.
+
+    Supports date-tag filtering: if the query contains '#YYYY-MM-DD', that tag
+    is translated into a ChromaDB metadata filter on the 'timestamp' field and
+    stripped from the semantic query.  This makes date-based retrieval exact
+    rather than probabilistic.
 
     Chunks with a cosine distance above DISTANCE_THRESHOLD are suppressed
     so the assistant never receives hallucinated proximity results.
@@ -139,17 +165,29 @@ def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | Non
     if total == 0:
         return "Vector index is leeg. Voer eerst ingest.py uit."
 
-    query_embedding = _embed(query)
+    clean_query, date_filter = _extract_date_filter(query)
+    query_embedding = _embed(clean_query)
+
+    # Build ChromaDB where clause — combine date and path_prefix filters with $and
+    where_clause: dict | None = None
+    conditions = []
+    if date_filter:
+        conditions.append({"timestamp": {"$contains": date_filter}})
+    if path_prefix:
+        conditions.append({"file_name": {"$contains": path_prefix}})
+
+    if len(conditions) == 1:
+        where_clause = conditions[0]
+    elif len(conditions) > 1:
+        where_clause = {"$and": conditions}
+
     kwargs: dict = {
         "query_embeddings": [query_embedding],
         "n_results": min(n_results, total),
         "include": ["documents", "metadatas", "distances"],
     }
-    if path_prefix:
-        try:
-            kwargs["where"] = {"file_name": {"$contains": path_prefix}}
-        except Exception:
-            pass
+    if where_clause:
+        kwargs["where"] = where_clause
 
     results = _collection.query(**kwargs)
 
