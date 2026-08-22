@@ -131,55 +131,109 @@ def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None =
 
 
 _DATE_TAG_RE = re.compile(r"#(\d{4}-\d{2}-\d{2})")
-_HOUR_TAG_RE = re.compile(r"#(\d{2})(?=\s|$)")
 
 
-def _extract_date_filter(query: str) -> tuple[str, str | None]:
+def _extract_date_filter(query: str) -> tuple[str, str | None, bool]:
     """Parse #YYYY-MM-DD tag from query string.
 
-    Returns (cleaned_query, date_string_or_None).  The date string is used
-    as a metadata substring filter on the 'timestamp' field (ISO format),
-    so '#2026-08-23' matches any timestamp starting with '2026-08-23'.
-    The tag is stripped from the query so the embedding is not polluted.
+    Returns (cleaned_query, date_string_or_None, has_topic).
+    - date_string: used as a metadata range filter on 'timestamp' (ISO format)
+    - has_topic: True if there are meaningful keywords beyond the date tag
+    The tag is stripped from the query so embeddings are not polluted.
     """
     m = _DATE_TAG_RE.search(query)
     if not m:
-        return query, None
+        return query, None, True
     date_str = m.group(1)
     clean = _DATE_TAG_RE.sub("", query).strip()
-    return clean or date_str, date_str  # keep date as fallback query if nothing left
+    has_topic = bool(clean)
+    return clean, date_str, has_topic
+
+
+def _build_where(date_filter: str | None, path_prefix: str | None) -> dict | None:
+    """Build a ChromaDB where clause from optional date and path filters.
+
+    Date filter uses ISO string range comparison: timestamp >= YYYY-MM-DD
+    and timestamp < YYYY-MM-DD+1day, which works because ISO strings sort
+    lexicographically (no $contains needed, avoids version compatibility issues).
+    """
+    conditions = []
+    if date_filter:
+        # ISO range: "2026-08-23" <= timestamp < "2026-08-24"
+        next_day = (
+            datetime.strptime(date_filter, "%Y-%m-%d")
+            .replace(hour=0, minute=0, second=0)
+        )
+        from datetime import timedelta
+        next_day_str = (next_day + timedelta(days=1)).strftime("%Y-%m-%d")
+        conditions.append({"timestamp": {"$gte": date_filter}})
+        conditions.append({"timestamp": {"$lt": next_day_str}})
+    if path_prefix:
+        conditions.append({"file_name": {"$contains": path_prefix}})
+
+    if not conditions:
+        return None
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"$and": conditions}
 
 
 def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | None = None) -> str:
     """Semantic search returning formatted text chunks.
 
-    Supports date-tag filtering: if the query contains '#YYYY-MM-DD', that tag
-    is translated into a ChromaDB metadata filter on the 'timestamp' field and
-    stripped from the semantic query.  This makes date-based retrieval exact
-    rather than probabilistic.
+    Date-tag handling (#YYYY-MM-DD):
+    - If the query contains ONLY a date tag (no topic keywords), a pure
+      metadata get() is performed — no semantic scoring, no distance filter.
+      All indexed chunks from that date are returned, ordered by file/chunk.
+    - If the query contains a date tag AND topic keywords, a semantic query
+      is run with the date as a metadata pre-filter and a relaxed distance
+      threshold so date-scoped results are not over-suppressed.
 
-    Chunks with a cosine distance above DISTANCE_THRESHOLD are suppressed
-    so the assistant never receives hallucinated proximity results.
+    Chunks without a date tag are filtered by the standard DISTANCE_THRESHOLD.
     """
     total = _collection.count()
     if total == 0:
         return "Vector index is leeg. Voer eerst ingest.py uit."
 
-    clean_query, date_filter = _extract_date_filter(query)
-    query_embedding = _embed(clean_query)
+    clean_query, date_filter, has_topic = _extract_date_filter(query)
+    where_clause = _build_where(date_filter, path_prefix)
 
-    # Build ChromaDB where clause — combine date and path_prefix filters with $and
-    where_clause: dict | None = None
-    conditions = []
-    if date_filter:
-        conditions.append({"timestamp": {"$contains": date_filter}})
-    if path_prefix:
-        conditions.append({"file_name": {"$contains": path_prefix}})
+    # --- Date-only query: pure metadata lookup, no semantic scoring ---
+    if date_filter and not has_topic:
+        get_kwargs: dict = {"include": ["documents", "metadatas"]}
+        if where_clause:
+            get_kwargs["where"] = where_clause
+        try:
+            raw = _collection.get(**get_kwargs)
+        except Exception:
+            logger.exception("search_vault_semantic: date-only get() failed")
+            return "Fout bij ophalen van datum-gefilterde resultaten."
 
-    if len(conditions) == 1:
-        where_clause = conditions[0]
-    elif len(conditions) > 1:
-        where_clause = {"$and": conditions}
+        docs = raw.get("documents", [])
+        metas = raw.get("metadatas", [])
+        if not docs:
+            return f"Geen fragmenten gevonden voor {date_filter}."
+
+        parts = []
+        for doc, meta in zip(docs[:n_results * 3], metas):  # cap output
+            if path_prefix and not meta.get("file_name", "").startswith(path_prefix):
+                continue
+            ts = meta.get("timestamp", "")
+            header = f"[{meta['file_name']} | {ts}]" if ts else f"[{meta['file_name']}]"
+            parts.append(f"{header}\n{doc}")
+            if len(parts) >= n_results:
+                break
+
+        if not parts:
+            return f"Geen fragmenten gevonden voor {date_filter}."
+        return "\n\n---\n\n".join(parts)
+
+    # --- Semantic query (with optional date pre-filter) ---
+    semantic_query = clean_query if has_topic else query
+    query_embedding = _embed(semantic_query)
+
+    # Relax distance threshold when a date filter narrows the search space
+    threshold = DISTANCE_THRESHOLD if not date_filter else min(DISTANCE_THRESHOLD * 1.5, 1.2)
 
     kwargs: dict = {
         "query_embeddings": [query_embedding],
@@ -202,7 +256,7 @@ def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | Non
     ):
         if path_prefix and not meta["file_name"].startswith(path_prefix):
             continue
-        if dist > DISTANCE_THRESHOLD:
+        if dist > threshold:
             continue  # suppress irrelevant results rather than hallucinate proximity
         ts = meta.get("timestamp", "")
         header = f"[{meta['file_name']} | {ts}]" if ts else f"[{meta['file_name']}]"
