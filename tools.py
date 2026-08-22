@@ -27,8 +27,8 @@ def _is_log_filename(file_name: str) -> bool:
 
 
 def generate_time_tag() -> str:
-    """Return a chronological search tag for the current month, e.g. '#2026-08'."""
-    return datetime.now().strftime("#%Y-%m")
+    """Return chronological search tags for the current moment, e.g. '#2026-08-23 #00 #16'."""
+    return datetime.now().strftime("#%Y-%m-%d #%H #%M")
 
 
 def read_vault(file_name: str) -> str:
@@ -64,15 +64,20 @@ def write_vault(file_name: str, content: str, timestamp: str | None = None) -> s
     path = os.path.join(VAULT_PATH, file_name)
     if not os.path.realpath(path).startswith(os.path.realpath(VAULT_PATH)):
         return "Error: path traversal not allowed"
+
+    # Append timestamp tags so every vault note is searchable by exact date/time
+    time_tags = datetime.now().strftime("#%Y-%m-%d #%H #%M")
+    tagged_content = content.rstrip() + f"\n\n{time_tags}\n"
+
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
+            f.write(tagged_content)
     except Exception as e:
         return f"Error writing file: {e}"
 
     try:
-        _index_file(file_name, content, timestamp or datetime.now().isoformat())
+        _index_file(file_name, tagged_content, timestamp or datetime.now().isoformat())
     except Exception:
         logger.exception("write_vault: failed to index %s", file_name)
 
@@ -1209,9 +1214,10 @@ TOOL_DEFINITIONS = [
                 "Use this to find relevant notes by meaning and context rather than exact filenames. "
                 "Returns the top 5 most relevant text fragments, each prefixed with its filename and "
                 "ISO 8601 timestamp so you can reason about temporal evolution of insights. "
-                "Every entry is tagged with a chronological search tag in the format #YYYY-MM (e.g. #2026-08). "
-                "To filter for recent entries, include the current month tag in your query (e.g. '#2026-08 zelfzorg'). "
-                "To search across a specific period, combine month tags with your topic keywords."
+                "Every entry is tagged with: #YYYY-MM-DD (date), #HH (hour), #MM (minute). "
+                "To filter by date use e.g. '#2026-08-23 zelfzorg'. "
+                "To filter by exact time use e.g. '#2026-08-23 #14 #30'. "
+                "Combine tags with topic keywords to narrow results by both time and content."
             ),
             "parameters": {
                 "type": "object",
