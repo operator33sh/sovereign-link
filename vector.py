@@ -285,6 +285,11 @@ def _index_path(path: Path, event_type: str = "modified") -> None:
         if content.strip():
             mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
             index_file(rel, content, mtime)
+            try:
+                from timeline import index_file as _timeline_index
+                _timeline_index(rel, content, mtime)
+            except Exception:
+                logger.exception("Watcher failed to timeline-index %s", path)
             logger.info("Vault %s → indexed: %s", event_type, rel)
     except Exception:
         logger.exception("Watcher failed to index %s", path)

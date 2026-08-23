@@ -45,7 +45,12 @@ def add_message(role: str, content: str) -> None:
     _save()
 
 
+_MAX_TOOL_CONTENT = 8_000  # chars — prevents history bloat from large vault searches
+
+
 def add_tool_result(tool_call_id: str, content: str) -> None:
+    if len(content) > _MAX_TOOL_CONTENT:
+        content = content[:_MAX_TOOL_CONTENT] + "\n[…gekort]"
     _history.append({"role": "tool", "tool_call_id": tool_call_id, "content": content, "timestamp": _now()})
     _save()
 

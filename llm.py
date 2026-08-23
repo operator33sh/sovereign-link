@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 from datetime import datetime
 
 import httpx
+
+logger = logging.getLogger(__name__)
 from timezone_manager import get_zoneinfo as _get_local_tz
 
 import context
@@ -210,14 +213,43 @@ _client = httpx.Client(
 )
 
 
+_MAX_CHARS = 700_000  # ~200k tokens @ 3.5 chars/token — leaves headroom under 262k limit
+_TOOL_RESULT_CAP = 8_000  # max chars per tool result kept in history
+
+
+def _trim_messages(messages: list) -> list:
+    """Truncate tool results and drop oldest messages to stay within context limit."""
+    # First pass: cap individual tool message content
+    trimmed = []
+    for msg in messages:
+        if msg.get("role") == "tool" and isinstance(msg.get("content"), str):
+            if len(msg["content"]) > _TOOL_RESULT_CAP:
+                msg = {**msg, "content": msg["content"][:_TOOL_RESULT_CAP] + "\n[…gekort]"}
+        trimmed.append(msg)
+
+    # Second pass: if still too large, drop oldest non-system messages (keep last 6)
+    total = sum(len(str(m.get("content", "") or "") + str(m.get("tool_calls", ""))) for m in trimmed)
+    if total > _MAX_CHARS:
+        system = [m for m in trimmed if m.get("role") == "system"]
+        rest = [m for m in trimmed if m.get("role") != "system"]
+        # Keep the most recent messages; always keep at least the last user message
+        keep = max(6, len(rest) // 2)
+        trimmed = system + rest[-keep:]
+        logger.warning("Context trimmed: dropped %d messages (total was ~%d chars)", len(rest) - keep, total)
+
+    return trimmed
+
+
 def _chat(messages: list) -> dict:
     payload = {
         "model": MODEL,
-        "messages": messages,
+        "messages": _trim_messages(messages),
         "tools": TOOL_DEFINITIONS,
         "stream": False,
     }
     response = _client.post("/v1/chat/completions", json=payload)
+    if response.status_code >= 400:
+        logger.error("LLM API %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
     return response.json()
 
