@@ -51,14 +51,14 @@ class SessionLogger:
     def on_turn(self, history: list) -> None:
         """Call after each user-assistant exchange.
 
-        Increments the turn counter, updates the heartbeat, and writes a vault
-        snapshot when LOG_EVERY_TURNS turns have elapsed since the last write.
+        Increments the turn counter and updates the heartbeat.
+        Periodic vault snapshots are intentionally omitted — the memory pipeline
+        (SovereignLog) is the sole output file. force_flush() remains available
+        as a shutdown fallback when the pipeline fails.
         """
         with self._lock:
             self._turn_count += 1
             self._update_heartbeat()
-            if self._turn_count - self._last_logged_turn >= LOG_EVERY_TURNS:
-                self._write_snapshot(history, reason="periodic")
 
     def force_flush(self, history: list, reason: str = "shutdown") -> None:
         """Force an immediate snapshot write.
@@ -147,6 +147,15 @@ class SessionLogger:
                     "SessionLogger: snapshot written → %s (turns=%d, reason=%s)",
                     file_name, self._turn_count, reason,
                 )
+                # Explicitly sync to SQLite timeline — write_vault's internal call
+                # may fail silently; this ensures session snapshots are always indexed.
+                try:
+                    from timeline import index_file as _timeline_index
+                    tagged = content_str + f"\n\n{now.strftime('#%Y-%m-%d #%H #%M')}\n"
+                    _timeline_index(file_name, tagged, now.isoformat())
+                    logger.debug("SessionLogger: timeline synced → %s", file_name)
+                except Exception:
+                    logger.exception("SessionLogger: timeline sync failed for %s", file_name)
             else:
                 logger.error("SessionLogger: write_vault returned error: %s", result)
         except Exception:

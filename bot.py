@@ -437,10 +437,8 @@ def _make_llm_trigger_fn() -> "Callable[[], None]":
 
 async def _auto_memory_background(update: Update, transcript: str) -> None:
     """Fire-and-forget background task: run memory pipeline silently."""
-    global _messages_since_last_memory
     try:
         result = await asyncio.to_thread(run_memory_pipeline, transcript)
-        _messages_since_last_memory = 0
         _delete_session_draft()
         logger.info("Sovereign Memory auto-saved: %s", result['file_name'])
     except Exception:
@@ -460,6 +458,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     _proactive_loop = asyncio.get_event_loop()
 
     if _messages_since_last_memory >= AUTO_MEMORY_EVERY:
+        _messages_since_last_memory = 0  # reset immediately to prevent double-trigger
         history = context.get_history()
         transcript = "\n".join(
             f"{m['role'].upper()}: {m.get('content', '')}"
@@ -631,15 +630,17 @@ async def _on_shutdown(app: Application) -> None:
     if not transcript.strip():
         return
     logger.info("Shutdown: saving %d unsaved messages to Sovereign Memory...", _messages_since_last_memory)
+    pipeline_ok = False
     try:
         result = await asyncio.to_thread(run_memory_pipeline, transcript)
         logger.info("Shutdown memory saved: %s", result["file_name"])
+        pipeline_ok = True
     except Exception:
         logger.exception("Shutdown memory pipeline failed")
 
-    # Deterministic fallback: flush raw session snapshot regardless of whether
-    # the LLM-based memory pipeline succeeded.
-    session_logger.force_flush(context.get_history(), reason="shutdown")
+    if not pipeline_ok:
+        # Fallback: raw session snapshot only if the memory pipeline failed.
+        session_logger.force_flush(context.get_history(), reason="shutdown")
 
 
 def build_app() -> Application:

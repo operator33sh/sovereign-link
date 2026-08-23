@@ -297,35 +297,40 @@ def extract_memory_insights(transcript: str, prior_memory: str = "") -> dict:
     """
     today = datetime.now(tz=_get_local_tz()).strftime("%Y-%m-%d")
     prompt = (
-        "Analyse the following conversation transcript and extract High-Value Insights (HVIs).\n"
-        "HVIs are: psychological breakthroughs, redefined values, recurring shadow patterns, "
-        "or technical/architectural decisions with long-term consequence.\n\n"
-        "Return JSON with exactly two fields:\n"
-        '- "topic": a 2-4 word slug using underscores, no spaces (e.g. "Shadow_Integration_Cycle")\n'
-        '- "insights": a list of objects, each with:\n'
-        '    - "timestamp": ISO date string (use today: ' + today + ')\n'
-        '    - "narrative": 1-3 sentences describing the trigger and reasoning process that led to the insight — '
-        'capture the user\'s experience, frustration, or question that started the thread, and how it unfolded. '
-        'Write from the user\'s perspective. Do NOT state the conclusion here.\n'
-        '    - "core_insight": one sentence summarising the breakthrough or conclusion\n'
-        '    - "emotional_state": e.g. Vulnerable, Analytical, Transgressive, Integrative\n'
-        '    - "tags": list of Obsidian hashtags e.g. ["#shadowwork", "#Sovereign"]\n'
-        '    - "connected_nodes": list of [[filename]] wikilinks to the most relevant previous logs '
-        '(use exact filenames from the prior memory context below, empty list if none)\n'
-        '    - "relation_type": describe how this insight relates to a previous one — use one of: '
-        '"Evolution of [[X]]", "Extension of [[X]]", "Contradiction of [[X]]", or null if no clear relation\n'
-        '    - "open_questions": list of strings describing unresolved tensions (empty list if none)\n\n'
+        "Analyseer het volgende gespreksverslag en extraheer Hoog-Waardige Inzichten (HVI's).\n"
+        "HVI's zijn: psychologische doorbraken, herdefinieerde waarden, terugkerende schaduwpatronen, "
+        "of technische/architecturale beslissingen met langetermijngevolgen.\n\n"
+        "BELANGRIJK: Schrijf alle inhoudsvelden (narrative, core_insight, emotional_state, open_questions) "
+        "uitsluitend in het Nederlands.\n\n"
+        "Geef JSON terug met precies twee velden:\n"
+        '- "topic": een slug van 2-4 woorden met underscores, geen spaties (bijv. "Schaduw_Integratie_Cyclus")\n'
+        '- "insights": een lijst van objecten, elk met:\n'
+        '    - "timestamp": ISO-datumstring (gebruik vandaag: ' + today + ')\n'
+        '    - "narrative": 1-3 zinnen die de aanleiding en het redeneerproces beschrijven — '
+        'beschrijf de ervaring, frustratie of vraag van de gebruiker die de thread startte, en hoe het zich ontvouwde. '
+        'Schrijf vanuit het perspectief van de gebruiker. Vermeld de conclusie NIET hier.\n'
+        '    - "core_insight": één zin die de doorbraak of conclusie samenvat\n'
+        '    - "emotional_state": bijv. Kwetsbaar, Analytisch, Transgressief, Integratief\n'
+        '    - "tags": lijst van Obsidian hashtags bijv. ["#schaduwwerk", "#Sovereign"]\n'
+        '    - "connected_nodes": lijst van [[bestandsnaam]] wikilinks naar de meest relevante vorige logs '
+        '(gebruik exacte bestandsnamen uit de onderstaande geheugencontext, lege lijst indien geen)\n'
+        '    - "relation_type": beschrijf hoe dit inzicht zich verhoudt tot een vorig inzicht — gebruik één van: '
+        '"Evolutie van [[X]]", "Uitbreiding van [[X]]", "Tegenstelling van [[X]]", of null indien geen duidelijke relatie\n'
+        '    - "open_questions": lijst van strings die onopgeloste spanningen beschrijven (lege lijst indien geen)\n\n'
         + (
-            "RELATED PREVIOUS MEMORY LOGS (use these for connected_nodes and narrative references):\n"
+            "GERELATEERDE VORIGE GEHEUGENLOGS (gebruik deze voor connected_nodes en verwijzingen in de aanleiding):\n"
             f"{prior_memory}\n\n"
             if prior_memory else ""
         )
-        + f"Conversation:\n{transcript}\n\n"
-        "Return only JSON, nothing else."
+        + f"Gesprek:\n{transcript}\n\n"
+        "Geef uitsluitend JSON terug, niets anders."
     )
     payload = {
         "model": MODEL,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [
+            {"role": "system", "content": "Je bent een geheugenextractor. Je schrijft ALTIJD in het Nederlands, ongeacht de taal van het gesprek. Geef alleen geldige JSON terug."},
+            {"role": "user", "content": prompt},
+        ],
         "stream": False,
     }
     response = _client.post("/v1/chat/completions", json=payload)

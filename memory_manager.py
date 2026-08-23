@@ -100,19 +100,19 @@ def format_memory_note(
         questions_block = (
             "\n".join(f"  - {q}" for q in questions)
             if questions
-            else "  - (none)"
+            else "  - (geen)"
         )
 
-        lines.append(f"### Insight {i}\n")
-        lines.append(f"- Timestamp: {insight.get('timestamp', today)} {time_tag}")
-        lines.append(f"- Narrative: {insight.get('narrative', '')}")
-        lines.append(f"- Core Insight: {insight.get('core_insight', '')}")
+        lines.append(f"### Inzicht {i}\n")
+        lines.append(f"- Datum: {insight.get('timestamp', today)} {time_tag}")
+        lines.append(f"- Aanleiding: {insight.get('narrative', '')}")
+        lines.append(f"- Kernpunt: {insight.get('core_insight', '')}")
         relation = insight.get("relation_type") or ""
-        lines.append(f"- Relation: {relation if relation else '—'}")
-        lines.append(f"- Emotional/Psychological State: {insight.get('emotional_state', 'Unknown')}")
-        lines.append(f"- Related Tags: {tags_str}")
-        lines.append(f"- Connected Nodes: {nodes_str}")
-        lines.append(f"- Open Questions:\n{questions_block}")
+        lines.append(f"- Relatie: {relation if relation else '—'}")
+        lines.append(f"- Emotionele/psychologische staat: {insight.get('emotional_state', 'Onbekend')}")
+        lines.append(f"- Gerelateerde tags: {tags_str}")
+        lines.append(f"- Verbonden notities: {nodes_str}")
+        lines.append(f"- Open vragen:\n{questions_block}")
         lines.append("")
 
     content = "\n".join(lines)
