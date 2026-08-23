@@ -7,3 +7,4 @@ conversation_history.json
 package-lock.json
 stats/
 logs/
+.runtime/

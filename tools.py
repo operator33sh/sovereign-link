@@ -16,6 +16,10 @@ AGENT_TEMP_PATH = os.path.join(VAULT_PATH, ".agent_temp")
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_LOGS_PATH = os.path.join(PROJECT_ROOT, "logs")
 
+# Runtime state (session-scoped temp files like ACL) — outside the vault so the
+# vault watcher never picks them up.
+RUNTIME_PATH = os.path.join(PROJECT_ROOT, ".runtime")
+
 # Filename keywords that trigger automatic redirect from vault → logs/
 # Only applies to bare root-level filenames — any path with a directory
 # component (e.g. memory/SovereignLog.md, Conversaties/Sessie.md) is an
@@ -71,6 +75,20 @@ def write_vault(file_name: str, content: str, timestamp: str | None = None) -> s
             f"[VAULT REDIRECT] '{file_name}' contains a process-log keyword and was "
             f"automatically redirected to 'logs/redirected/{safe_name}' (not written to vault)."
         )
+
+    # Redirect session-scoped system files away from the vault so the watcher
+    # never picks them up and triggers unnecessary re-indexing.
+    _RUNTIME_REDIRECTS = {".system/active_briefing.md"}
+    if file_name in _RUNTIME_REDIRECTS:
+        runtime_path = os.path.join(RUNTIME_PATH, os.path.basename(file_name))
+        try:
+            os.makedirs(RUNTIME_PATH, exist_ok=True)
+            with open(runtime_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            return f"Error writing runtime file: {e}"
+        logger.info("write_vault: ACL redirected to runtime: %s", runtime_path)
+        return "Written successfully to '.system/active_briefing.md'"
 
     path = os.path.join(VAULT_PATH, file_name)
     if not os.path.realpath(path).startswith(os.path.realpath(VAULT_PATH)):

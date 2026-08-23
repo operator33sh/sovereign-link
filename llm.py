@@ -10,7 +10,7 @@ from timezone_manager import get_zoneinfo as _get_local_tz
 
 import context
 import personality as _personality
-from tools import TOOL_DEFINITIONS, TOOL_HANDLERS
+from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, RUNTIME_PATH
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
@@ -136,7 +136,7 @@ def _load_acl() -> str:
     Returns an empty string if the file is missing or empty, otherwise returns
     a formatted high-priority section to be appended to the system prompt.
     """
-    acl_path = os.path.join(_VAULT_PATH, ".system", "active_briefing.md")
+    acl_path = os.path.join(RUNTIME_PATH, "active_briefing.md")
     try:
         with open(acl_path, "r", encoding="utf-8") as f:
             content = f.read().strip()
