@@ -26,10 +26,7 @@ TIMELINE_DB = os.environ.get(
     os.path.expanduser("~/.sovereign-link/timeline.db"),
 )
 
-# Directories to index (relative vault paths must start with one of these)
-_INDEXED_PREFIXES = ("Conversaties/", "memory/")
-
-# Directories to always skip
+# Directories to always skip (transient/system files)
 _SKIP_PREFIXES = (".agent_temp/", ".system/", "system_memory/")
 
 # Regex to extract session_id from filenames like Sessie_20260823_143000
@@ -37,6 +34,8 @@ _SESSION_RE = re.compile(r"Sessie_(\d{8}_\d{6})")
 
 # Regex to extract YYYY-MM-DD from file path or content timestamp tags
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+# Specific #YYYY-MM-DD hashtag (ISO 8601 date with # prefix, word boundary after)
+_DATETAG_RE = re.compile(r"#(\d{4}-\d{2}-\d{2})\b")
 _TIME_RE = re.compile(r"#(\d{2})\s+#(\d{2})\b")  # #HH #MM tags
 
 
@@ -91,31 +90,28 @@ def _should_index(file_path: str) -> bool:
     for skip in _SKIP_PREFIXES:
         if file_path.startswith(skip):
             return False
-    for prefix in _INDEXED_PREFIXES:
-        if file_path.startswith(prefix):
-            return True
-    return False
+    return True
 
 
 def _extract_datetime(file_path: str, content: str, timestamp: str) -> tuple[str, str, str]:
     """Extract (date, time, datetime_iso) from path/content/timestamp.
 
     Priority:
-    1. Date from filename (YYYY-MM-DD pattern)
-    2. Date from #YYYY-MM-DD tag in content
-    3. Date from timestamp argument
+    1. #YYYY-MM-DD tag in content (ISO 8601 date with # prefix)
+    2. Date from filename (YYYY-MM-DD pattern)
+    3. Date from timestamp argument (filesystem date)
     """
-    # Try filename first
-    path_date = _DATE_RE.search(Path(file_path).stem)
-    if path_date:
-        date_str = path_date.group(1)
+    # Priority 1: #YYYY-MM-DD content tag — first occurrence wins
+    content_tag = _DATETAG_RE.search(content)
+    if content_tag:
+        date_str = content_tag.group(1)
     else:
-        # Try content tags
-        content_date = _DATE_RE.search(content[:500])
-        if content_date:
-            date_str = content_date.group(1)
+        # Priority 2: date embedded in filename
+        path_date = _DATE_RE.search(Path(file_path).stem)
+        if path_date:
+            date_str = path_date.group(1)
         else:
-            # Fall back to timestamp argument
+            # Priority 3: fall back to filesystem timestamp
             date_str = timestamp[:10] if len(timestamp) >= 10 else datetime.now().strftime("%Y-%m-%d")
 
     # Try to extract time from #HH #MM tags in content
@@ -303,6 +299,66 @@ def search_by_session(session_id: str) -> list[dict]:
     except Exception:
         logger.exception("timeline: search_by_session failed (session=%s)", session_id)
         return []
+
+
+def backfill_dates(vault_path: str) -> dict:
+    """Re-scan vault files and update timeline entries with dates from #YYYY-MM-DD tags.
+
+    Useful for fixing gaps caused by incorrect filesystem dates during migrations or
+    syncs. Only updates entries where the stored date differs from the tag in content.
+
+    Returns a summary dict: {updated, skipped, warned, errors}.
+    """
+    vault = Path(vault_path)
+    if not vault.exists():
+        logger.error("timeline.backfill_dates: vault not found at %s", vault_path)
+        return {"updated": 0, "skipped": 0, "warned": 0, "errors": 0}
+
+    stats = {"updated": 0, "skipped": 0, "warned": 0, "errors": 0}
+    conn = _get_conn()
+
+    for md_file in sorted(vault.rglob("*.md")):
+        try:
+            rel = str(md_file.relative_to(vault))
+            if not _should_index(rel):
+                stats["skipped"] += 1
+                continue
+
+            content = md_file.read_text(encoding="utf-8")
+            if not content.strip():
+                stats["skipped"] += 1
+                continue
+
+            tag_match = _DATETAG_RE.search(content)
+            if tag_match:
+                correct_date = tag_match.group(1)
+                row = conn.execute(
+                    "SELECT date FROM entries WHERE file_path = ?", (rel,)
+                ).fetchone()
+                if row is None or row["date"] != correct_date:
+                    mtime = datetime.fromtimestamp(md_file.stat().st_mtime).isoformat()
+                    index_file(rel, content, mtime)
+                    logger.info("backfill: %s → %s", rel, correct_date)
+                    stats["updated"] += 1
+                else:
+                    stats["skipped"] += 1
+            else:
+                logger.warning(
+                    "backfill: no #YYYY-MM-DD tag in %s — add a date tag for proper "
+                    "chronological indexing",
+                    rel,
+                )
+                stats["warned"] += 1
+
+        except Exception:
+            logger.exception("timeline.backfill_dates: failed for %s", md_file)
+            stats["errors"] += 1
+
+    logger.info(
+        "timeline.backfill_dates: done — updated=%d skipped=%d warned=%d errors=%d",
+        stats["updated"], stats["skipped"], stats["warned"], stats["errors"],
+    )
+    return stats
 
 
 def rescan_vault(vault_path: str) -> int:

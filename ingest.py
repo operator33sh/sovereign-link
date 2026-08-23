@@ -2,8 +2,9 @@
 """Vault indexing tool.
 
 Usage:
-    python ingest.py           # start filesystem watcher only
-    python ingest.py --rescan  # full vault rescan, then exit
+    python ingest.py            # start filesystem watcher only
+    python ingest.py --rescan   # full vault rescan, then exit
+    python ingest.py --backfill # fix timeline dates from #YYYY-MM-DD tags, then exit
 """
 import logging
 import re
@@ -26,11 +27,23 @@ logging.basicConfig(
 
 
 _DATE_IN_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})")
-_TIMETAG_IN_CONTENT = re.compile(r"#\d{4}-\d{2}")
+# Specific #YYYY-MM-DD hashtag — the canonical vault date tag
+_DATETAG_IN_CONTENT = re.compile(r"#(\d{4}-\d{2}-\d{2})\b")
 
 
 def _date_from_filename(path: Path) -> datetime | None:
     m = _DATE_IN_NAME.search(path.stem)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
+
+
+def _date_from_content(content: str) -> datetime | None:
+    """Return the first #YYYY-MM-DD tag found in content, or None."""
+    m = _DATETAG_IN_CONTENT.search(content)
     if m:
         try:
             return datetime.strptime(m.group(1), "%Y-%m-%d")
@@ -75,18 +88,32 @@ def ingest_all() -> None:
         # Use mtime only as fallback for the vector DB timestamp field
         mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
 
-        if not _TIMETAG_IN_CONTENT.search(content):
+        # Priority 1: #YYYY-MM-DD tag already in content
+        date_dt = _date_from_content(content)
+        source = "content-tag"
+
+        if date_dt is None:
+            # Priority 2: date from filename
             date_dt = _date_from_filename(path)
             source = "filename"
-            if date_dt is None:
-                date_dt = _date_from_git(path, vault)
-                source = "git"
-            if date_dt:
-                time_tag = date_dt.strftime("#%Y-%m")
-                content = f"{time_tag}\n\n{content}"
-                print(f"[{i}/{len(md_files)}]   → injected {time_tag} (from {source})")
-            else:
-                print(f"[{i}/{len(md_files)}]   → no date found, skipping tag injection")
+
+        if date_dt is None:
+            # Priority 3: date from git history
+            date_dt = _date_from_git(path, vault)
+            source = "git"
+
+        if date_dt is None:
+            # No date found — warn and leave content untagged
+            logging.warning(
+                "[%d/%d] %s: no #YYYY-MM-DD tag found — add one for proper "
+                "chronological indexing (falling back to filesystem date)",
+                i, len(md_files), rel,
+            )
+        elif not _DATETAG_IN_CONTENT.search(content):
+            # Inject #YYYY-MM-DD tag when content doesn't already have one
+            date_tag = date_dt.strftime("#%Y-%m-%d")
+            content = f"{date_tag}\n\n{content}"
+            print(f"[{i}/{len(md_files)}]   → injected {date_tag} (from {source})")
 
         index_file(rel, content, mtime)
 
@@ -102,6 +129,13 @@ def ingest_all() -> None:
 if __name__ == "__main__":
     if "--rescan" in sys.argv:
         ingest_all()
+    elif "--backfill" in sys.argv:
+        from timeline import backfill_dates
+        stats = backfill_dates(VAULT_PATH)
+        print(
+            f"\nBackfill complete: updated={stats['updated']} skipped={stats['skipped']} "
+            f"warned={stats['warned']} errors={stats['errors']}"
+        )
     else:
         start_vault_watcher()
         print(f"Watching {VAULT_PATH} for changes (Ctrl+C to stop)...")
