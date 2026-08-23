@@ -209,7 +209,7 @@ def _build_system_prompt() -> str:
 _client = httpx.Client(
     base_url=OLLAMA_BASE_URL,
     headers={"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {},
-    timeout=120.0,
+    timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
 )
 
 
@@ -247,11 +247,18 @@ def _chat(messages: list) -> dict:
         "tools": TOOL_DEFINITIONS,
         "stream": False,
     }
-    response = _client.post("/v1/chat/completions", json=payload)
-    if response.status_code >= 400:
-        logger.error("LLM API %s: %s", response.status_code, response.text[:500])
-    response.raise_for_status()
-    return response.json()
+    last_exc = None
+    for attempt in range(3):
+        try:
+            response = _client.post("/v1/chat/completions", json=payload)
+            if response.status_code >= 400:
+                logger.error("LLM API %s: %s", response.status_code, response.text[:500])
+            response.raise_for_status()
+            return response.json()
+        except httpx.ReadTimeout as e:
+            last_exc = e
+            logger.warning("LLM ReadTimeout (attempt %d/3), retrying...", attempt + 1)
+    raise last_exc
 
 
 def summarize_to_vault(recent_messages: list) -> dict:
