@@ -258,6 +258,13 @@ def _chat(messages: list) -> dict:
         except httpx.ReadTimeout as e:
             last_exc = e
             logger.warning("LLM ReadTimeout (attempt %d/3), retrying...", attempt + 1)
+        except httpx.HTTPStatusError as e:
+            last_exc = e
+            if e.response.status_code in (429, 503) and attempt < 2:
+                logger.warning("LLM %s (attempt %d/3), retrying...", e.response.status_code, attempt + 1)
+                import time; time.sleep(3 * (attempt + 1))
+            else:
+                raise
     raise last_exc
 
 
