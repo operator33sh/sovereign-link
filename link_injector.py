@@ -271,14 +271,14 @@ def build_vault_map(
             if not stripped or stripped.startswith('#'):
                 continue
             body_words.extend(stripped.split())
-            if len(body_words) >= max_preview_words:
+            if max_preview_words and len(body_words) >= max_preview_words:
                 break
 
         entries.append({
             'file': rel_path,
             'title': title,
             'tags': tags,
-            'preview': ' '.join(body_words[:max_preview_words]),
+            'preview': ' '.join(body_words[:max_preview_words] if max_preview_words else body_words),
         })
         prog.update(1)
 
@@ -1130,8 +1130,8 @@ Voorbeelden:
         help="Bestanden per LLM-chunk (standaard: 50)",
     )
     parser.add_argument(
-        "--preview-words", type=int, default=50, metavar="N",
-        help="Max woorden per bestand in de vault map (standaard: 50)",
+        "--preview-words", type=int, default=0, metavar="N",
+        help="Max woorden per bestand in de vault map (0 = volledig, standaard: 0)",
     )
     parser.add_argument(
         "--max-retries", type=int, default=3, metavar="N",
