@@ -28,6 +28,29 @@ from datetime import timedelta
 
 import httpx
 
+# ── .env laden (standalone script heeft geen agent-bootstrap) ─────────────────
+
+def _load_dotenv() -> None:
+    """Laad .env vanuit de scriptdirectory of de werkdirectory."""
+    for candidate in (
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+        os.path.join(os.getcwd(), ".env"),
+    ):
+        if os.path.isfile(candidate):
+            with open(candidate) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, val = line.partition("=")
+                    key = key.strip()
+                    val = val.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+            break
+
+_load_dotenv()
+
 # ── Configuratie ──────────────────────────────────────────────────────────────
 
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
