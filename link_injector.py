@@ -157,7 +157,11 @@ def error(msg: str):
 
 # ── Stap 1: Vault scannen ─────────────────────────────────────────────────────
 
-def build_vault_map(directory: str = "", max_preview_words: int = 50) -> list[dict]:
+def build_vault_map(
+    directory: str = "",
+    max_preview_words: int = 50,
+    uncovered_only: bool = False,
+) -> list[dict]:
     scan_root = os.path.join(VAULT_PATH, directory) if directory else VAULT_PATH
     real_vault = os.path.realpath(VAULT_PATH)
 
@@ -173,6 +177,20 @@ def build_vault_map(directory: str = "", max_preview_words: int = 50) -> list[di
         for fname in files:
             if fname.endswith('.md'):
                 all_md.append(os.path.join(root, fname))
+
+    # Filter op bestanden zonder bestaande wikilinks
+    if uncovered_only:
+        _wikilink_re = re.compile(r'\[\[')
+        filtered = []
+        for p in all_md:
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    if not _wikilink_re.search(f.read()):
+                        filtered.append(p)
+            except Exception:
+                pass
+        info(f"--uncovered-only: {len(filtered)} van {len(all_md)} bestanden zonder links")
+        all_md = filtered
 
     prog = Progress(len(all_md), "Vault scannen")
     entries: list[dict] = []
@@ -416,10 +434,12 @@ def inject_links(
             prog.update(1, f"leesfout: {e}")
             continue
 
-        wikilink = f'[[{target}]]'
+        # Strip .md extensie — Obsidian wikilinks bevatten nooit de extensie
+        target_clean = target.removesuffix('.md')
+        wikilink = f'[[{target_clean}]]'
 
-        # Duplicaat?
-        if wikilink in content:
+        # Duplicaat? Check ook de foute variant met extensie
+        if wikilink in content or f'[[{target}]]' in content:
             skipped += 1
             prog.update(1, "dup")
             continue
@@ -518,6 +538,10 @@ Voorbeelden:
         help="Max LLM-retries per chunk bij 429/503/timeout (standaard: 3)",
     )
     parser.add_argument(
+        "--uncovered-only", action="store_true",
+        help="Analyseer alleen bestanden die nog geen [[wikilinks]] bevatten",
+    )
+    parser.add_argument(
         "--from-matrix", metavar="FILE",
         help="Sla scan+LLM over en gebruik een bestaand link_matrix.json bestand",
     )
@@ -557,6 +581,7 @@ def main():
             entries = build_vault_map(
                 directory=args.directory,
                 max_preview_words=args.preview_words,
+                uncovered_only=args.uncovered_only,
             )
         except Exception as e:
             error(f"Scan mislukt: {e}")
