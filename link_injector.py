@@ -55,6 +55,7 @@ _load_dotenv()
 
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 AGENT_TEMP_PATH = os.path.join(VAULT_PATH, ".agent_temp")
+MOC_DIR = os.environ.get("MOC_DIR", "MOCs")  # submap in vault voor MOC-bestanden
 BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com")
 API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
@@ -82,6 +83,25 @@ Geef UITSLUITEND een JSON-array terug, geen uitleg, geen markdown:
 [{"source": "map/A.md", "target": "map/B", "context": "Gerelateerd"}]
 
 Als er geen zinvolle links zijn: []
+"""
+
+MOC_SYSTEM_PROMPT = """\
+Je bent een vault-architect voor een Obsidian kennisbank in het Nederlands.
+Je krijgt een lijst vault-bestanden (JSON) met bestandsnaam, titel en tags.
+
+Taak: groepeer de bestanden in 8-20 thematische clusters. Elk cluster krijgt een MOC (Map of Content).
+
+Regels:
+- Elk bestand mag in MAX 2 clusters zitten
+- MOC-naam: korte CamelCase naam zonder spaties, prefix 'MOC_' (bijv. MOC_Fractalisme)
+- moc_title: leesbare Nederlandse naam (bijv. "Fractalisme")
+- Sla bestaande MOC-bestanden (die al 'MOC_' in de naam hebben) over als source
+- Max 30 spokes per MOC
+
+Geef UITSLUITEND een JSON-array terug, geen uitleg, geen markdown:
+[{"moc_name": "MOC_Thema", "moc_title": "Thema", "spokes": ["map/A.md", "B.md"]}]
+
+Als er geen clusters zijn: []
 """
 
 # ── Progress display ──────────────────────────────────────────────────────────
@@ -342,6 +362,26 @@ def analyze_vault_map(
     return all_links
 
 
+def analyze_for_mocs(entries: list[dict], max_retries: int) -> list[dict]:
+    """Één LLM-call: groepeer alle vault-entries in thematische MOC-clusters."""
+    condensed = [{'file': e['file'], 'title': e['title'], 'tags': e['tags']} for e in entries]
+    condensed = [e for e in condensed if 'MOC_' not in os.path.basename(e['file'])]
+
+    info(f"MOC-analyse: {len(condensed)} bestanden in één LLM-call...")
+    messages = [
+        {"role": "system", "content": MOC_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(condensed, ensure_ascii=False)},
+    ]
+    try:
+        content, attempts = _llm_call(messages, max_retries)
+        clusters = _extract_json(content)
+        info(f"LLM leverde {len(clusters)} clusters (na {attempts} poging(en))")
+        return clusters
+    except Exception as e:
+        warn(f"MOC-analyse mislukt: {e}")
+        return []
+
+
 # ── Stap 3: Mechanische injectie ─────────────────────────────────────────────
 
 def _insert_before_timestamps(content: str, text: str) -> str:
@@ -468,6 +508,166 @@ def inject_links(
     return injected, skipped, errors, dry_log
 
 
+# ── MOC-pipeline ─────────────────────────────────────────────────────────────
+
+def _moc_timestamp() -> str:
+    from datetime import datetime
+    now = datetime.now()
+    return f"#MOC #{now.strftime('%Y-%m-%d')} #{now.strftime('%H')} #{now.strftime('%M')}"
+
+
+def _moc_template(moc_name: str, moc_title: str, spokes: list[str]) -> str:
+    spoke_links = '\n'.join(
+        f'- [[{os.path.splitext(os.path.basename(s))[0]}]]'
+        for s in spokes
+    )
+    return (
+        f"# {moc_name}\n\n"
+        f"## 👑 Centraal Dashboard: {moc_title}\n\n"
+        f"Dit dashboard fungeert als het centrale punt voor {moc_title}.\n\n"
+        f"### 💎 Kernconcepten\n\n"
+        f"{spoke_links}\n\n"
+        f"{_moc_timestamp()}\n"
+    )
+
+
+def _update_moc_kernconcepten(content: str, new_links: list[str]) -> str:
+    """Voeg nieuwe spoke-links toe aan bestaande MOC Kernconcepten sectie. Idempotent."""
+    section_re = re.compile(r'(### 💎 Kernconcepten\n)(.*?)(?=\n## |\n#[^#]|\Z)', re.DOTALL)
+    m = section_re.search(content)
+    if not m:
+        block = '### 💎 Kernconcepten\n\n' + '\n'.join(new_links) + '\n\n'
+        return _insert_before_timestamps(content, block)
+    existing_block = m.group(2)
+    to_add = [lnk for lnk in new_links if lnk not in existing_block]
+    if not to_add:
+        return content
+    new_block = existing_block.rstrip() + '\n' + '\n'.join(to_add) + '\n'
+    return content[:m.start(2)] + new_block + content[m.end(2):]
+
+
+def inject_moc_links(
+    clusters: list[dict],
+    dry_run: bool = False,
+) -> tuple[int, int, int, int, list[dict]]:
+    """Maak MOC-bestanden aan (of update ze) en injecteer bidirectionele links.
+
+    Returns: (mocs_created, mocs_updated, spoke_links_injected, errors, dry_log)
+    """
+    real_vault = os.path.realpath(VAULT_PATH)
+    moc_dir_abs = os.path.join(VAULT_PATH, MOC_DIR)
+
+    mocs_created = 0
+    mocs_updated = 0
+    spoke_injected = 0
+    errors = 0
+    dry_log: list[dict] = []
+
+    if not dry_run:
+        os.makedirs(moc_dir_abs, exist_ok=True)
+
+    total_ops = sum(1 + len(c.get('spokes', [])) for c in clusters)
+    prog = Progress(total_ops, "MOC injectie ")
+
+    for cluster in clusters:
+        moc_name = (cluster.get('moc_name') or '').strip()
+        moc_title = (cluster.get('moc_title') or moc_name).strip()
+        spokes = [s for s in cluster.get('spokes', []) if s]
+
+        if not moc_name or not moc_name.startswith('MOC_'):
+            errors += 1
+            prog.update(1, f"ongeldige MOC-naam: {moc_name}")
+            continue
+
+        moc_file = f"{moc_name}.md"
+        moc_path = os.path.join(moc_dir_abs, moc_file)
+        moc_wikilink = f'[[{moc_name}]]'
+
+        prog.peek(f"{moc_name} ({len(spokes)} spokes)")
+
+        spoke_wikilinks = [
+            f'- [[{os.path.splitext(os.path.basename(s))[0]}]]'
+            for s in spokes
+        ]
+
+        if dry_run:
+            exists = os.path.isfile(moc_path)
+            dry_log.append({
+                'action': 'update_moc' if exists else 'create_moc',
+                'moc': os.path.join(MOC_DIR, moc_file),
+                'spokes': len(spokes),
+            })
+            if exists:
+                mocs_updated += 1
+            else:
+                mocs_created += 1
+            prog.update(1, f"[DRY] {moc_name}")
+        else:
+            try:
+                if not os.path.isfile(moc_path):
+                    with open(moc_path, 'w', encoding='utf-8') as f:
+                        f.write(_moc_template(moc_name, moc_title, spokes))
+                    mocs_created += 1
+                    prog.update(1, f"✚ {moc_name}")
+                else:
+                    with open(moc_path, 'r', encoding='utf-8') as f:
+                        moc_content = f.read()
+                    updated = _update_moc_kernconcepten(moc_content, spoke_wikilinks)
+                    if updated != moc_content:
+                        with open(moc_path, 'w', encoding='utf-8') as f:
+                            f.write(updated)
+                        mocs_updated += 1
+                        prog.update(1, f"↑ {moc_name}")
+                    else:
+                        prog.update(1, f"= {moc_name} (geen nieuwe spokes)")
+            except Exception as e:
+                errors += 1
+                prog.update(1, f"MOC-schrijffout: {e}")
+                continue
+
+        for spoke in spokes:
+            src_path = os.path.join(VAULT_PATH, spoke)
+            if not os.path.realpath(src_path).startswith(real_vault):
+                errors += 1
+                prog.update(1, "path traversal")
+                continue
+            if not os.path.isfile(src_path):
+                errors += 1
+                prog.update(1, f"spoke niet gevonden: {spoke}")
+                continue
+            try:
+                with open(src_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception as e:
+                errors += 1
+                prog.update(1, f"leesfout: {e}")
+                continue
+            if moc_wikilink in content:
+                prog.update(1, "dup")
+                continue
+            new_content = _do_inject(content, moc_wikilink, 'Gerelateerd')
+            if dry_run:
+                dry_log.append({'action': 'spoke_link', 'source': spoke, 'wikilink': moc_wikilink})
+                spoke_injected += 1
+                prog.update(1, f"[DRY] {os.path.basename(spoke)}")
+            else:
+                try:
+                    with open(src_path, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+                    spoke_injected += 1
+                    prog.update(1)
+                except Exception as e:
+                    errors += 1
+                    prog.update(1, f"schrijffout: {e}")
+
+    prog.finish(
+        f"— {mocs_created} MOCs aangemaakt, {mocs_updated} bijgewerkt, "
+        f"{spoke_injected} spoke-links geïnjecteerd, {errors} fouten"
+        + (" [DRY-RUN]" if dry_run else "")
+    )
+    return mocs_created, mocs_updated, spoke_injected, errors, dry_log
+
+
 # ── Samenvatting ─────────────────────────────────────────────────────────────
 
 def print_summary(
@@ -540,6 +740,10 @@ Voorbeelden:
     parser.add_argument(
         "--uncovered-only", action="store_true",
         help="Analyseer alleen bestanden die nog geen [[wikilinks]] bevatten",
+    )
+    parser.add_argument(
+        "--create-mocs", action="store_true",
+        help="MOC-modus: groepeer vault in clusters, maak MOC-bestanden aan, injecteer bidirectionele links",
     )
     parser.add_argument(
         "--from-matrix", metavar="FILE",
@@ -633,6 +837,51 @@ def main():
         dry_log=dry_log,
     )
     print(f"{'═'*TERM_WIDTH}\n")
+
+    # ── MOC-pipeline (optioneel) ───────────────────────────────────────────────
+    if args.create_mocs:
+        section("MOC-PIPELINE: Clusters analyseren")
+
+        # Als --from-matrix gebruikt werd, hebben we geen entries — scan opnieuw
+        if args.from_matrix:
+            info("Vault opnieuw scannen voor MOC-analyse (geen entries van --from-matrix)...")
+            try:
+                entries = build_vault_map(max_preview_words=args.preview_words)
+            except Exception as e:
+                error(f"Scan mislukt: {e}")
+                sys.exit(1)
+
+        clusters = analyze_for_mocs(entries, max_retries=args.max_retries)
+
+        if not clusters:
+            warn("Geen MOC-clusters gevonden — MOC-pipeline overgeslagen")
+        else:
+            moc_matrix_path = os.path.join(AGENT_TEMP_PATH, "moc_clusters.json")
+            os.makedirs(AGENT_TEMP_PATH, exist_ok=True)
+            try:
+                with open(moc_matrix_path, 'w', encoding='utf-8') as f:
+                    json.dump(clusters, f, ensure_ascii=False, indent=2)
+                info(f"{len(clusters)} clusters opgeslagen: {moc_matrix_path}")
+            except Exception as e:
+                warn(f"Opslaan clusters mislukt: {e}")
+
+            section(f"MOC-PIPELINE: Aanmaken + linken{'  [DRY-RUN]' if args.dry_run else ''}")
+            mocs_created, mocs_updated, spoke_injected, moc_errors, _ = inject_moc_links(
+                clusters,
+                dry_run=args.dry_run,
+            )
+
+            section("MOC SAMENVATTING")
+            info(f"MOC-bestanden aangemaakt : {mocs_created}")
+            info(f"MOC-bestanden bijgewerkt : {mocs_updated}")
+            info(f"Spoke-links geïnjecteerd : {spoke_injected}")
+            info(f"Fouten                   : {moc_errors}")
+            info(f"MOC-map                  : {os.path.join(VAULT_PATH, MOC_DIR)}/")
+            if moc_errors > 0:
+                warn(f"{moc_errors} fouten in MOC-pipeline.")
+            errors += moc_errors
+
+        print(f"{'═'*TERM_WIDTH}\n")
 
     sys.exit(1 if errors > 0 else 0)
 
