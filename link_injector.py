@@ -107,6 +107,26 @@ Geef UITSLUITEND een JSON-array terug, geen uitleg, geen markdown:
 Als er geen clusters zijn: []
 """
 
+SUB_MOC_SYSTEM_PROMPT = """\
+Je bent een vault-architect voor een Obsidian kennisbank in het Nederlands.
+Je krijgt een lijst vault-bestanden (JSON) die allemaal onder het thema '{parent_title}' vallen.
+
+Taak: groepeer deze bestanden in {sub_count} sub-thema's. Elk sub-thema krijgt één Sub-MOC.
+
+KRITIEKE REGELS:
+- Maak PRECIES {sub_count} sub-clusters (of minder als het thema te klein is voor sub-clustering)
+- Gebruik EXACT de 'file'-waarde als spoke-pad — kopieer letterlijk inclusief mapnaam en extensie (.md)
+- sub_moc_name: prefix '{parent_name}_' gevolgd door een korte CamelCase naam (bijv. {parent_name}_Patronen)
+- sub_moc_title: leesbare Nederlandse naam voor het sub-thema
+- Verdeel de bestanden zo evenwichtig mogelijk
+- Elk bestand in PRECIES één sub-cluster
+
+Geef UITSLUITEND een JSON-array terug, geen uitleg, geen markdown:
+[{{"sub_moc_name": "{parent_name}_SubThema", "sub_moc_title": "Sub Thema", "spokes": ["map/A.md"]}}]
+
+Als het thema te klein is voor sub-clusters: []
+"""
+
 # ── Progress display ──────────────────────────────────────────────────────────
 
 TERM_WIDTH = min(shutil.get_terminal_size((80, 20)).columns, 120)
@@ -386,6 +406,38 @@ def analyze_for_mocs(entries: list[dict], max_retries: int, moc_count: int = 5) 
         return []
 
 
+def analyze_for_sub_mocs(
+    parent_name: str,
+    parent_title: str,
+    spoke_entries: list[dict],
+    max_retries: int,
+    sub_count: int = 3,
+) -> list[dict]:
+    """LLM-call per top-level cluster: splits spokes in sub-thema's."""
+    condensed = [{'file': e['file'], 'title': e['title'], 'tags': e['tags']} for e in spoke_entries]
+    if not condensed:
+        return []
+
+    info(f"  Sub-MOC analyse: {len(condensed)} notes → {sub_count} sub-clusters voor {parent_name}...")
+    prompt = SUB_MOC_SYSTEM_PROMPT.format(
+        parent_title=parent_title,
+        parent_name=parent_name,
+        sub_count=sub_count,
+    )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": json.dumps(condensed, ensure_ascii=False)},
+    ]
+    try:
+        content, attempts = _llm_call(messages, max_retries)
+        sub_clusters = _extract_json(content)
+        info(f"  → {len(sub_clusters)} sub-clusters (na {attempts} poging(en))")
+        return sub_clusters
+    except Exception as e:
+        warn(f"  Sub-MOC analyse mislukt voor {parent_name}: {e}")
+        return []
+
+
 # ── Stap 2b: Links strippen ──────────────────────────────────────────────────
 
 _WIKILINK_RE = re.compile(r'\[\[[^\]]*\]\]')
@@ -593,6 +645,37 @@ def _moc_template(moc_name: str, moc_title: str, spokes: list[str]) -> str:
     )
 
 
+def _top_moc_template(moc_name: str, moc_title: str, sub_mocs: list[dict]) -> str:
+    """Template voor een top-level MOC die naar sub-MOCs linkt (depth-2)."""
+    sub_links = '\n'.join(
+        f"- [[{sc['sub_moc_name']}]] — {sc.get('sub_moc_title', sc['sub_moc_name'])}"
+        for sc in sub_mocs
+    )
+    return (
+        f"# {moc_name}\n\n"
+        f"## 👑 Centraal Dashboard: {moc_title}\n\n"
+        f"Dit dashboard fungeert als het centrale punt voor {moc_title}.\n\n"
+        f"### 🗂️ Sub-thema's\n\n"
+        f"{sub_links}\n\n"
+        f"{_moc_timestamp()}\n"
+    )
+
+
+def _sub_moc_template(sub_moc_name: str, sub_moc_title: str, parent_name: str, spokes: list[str]) -> str:
+    """Template voor een sub-MOC die naar notes linkt en teruglinkt naar de parent."""
+    spoke_links = '\n'.join(
+        f'- [[{os.path.splitext(os.path.basename(s))[0]}]]'
+        for s in spokes
+    )
+    return (
+        f"# {sub_moc_name}\n\n"
+        f"Onderdeel van [[{parent_name}]] — {sub_moc_title}\n\n"
+        f"### 💎 Kernconcepten\n\n"
+        f"{spoke_links}\n\n"
+        f"{_moc_timestamp()}\n"
+    )
+
+
 def _update_moc_kernconcepten(content: str, new_links: list[str]) -> str:
     """Voeg nieuwe spoke-links toe aan bestaande MOC Kernconcepten sectie. Idempotent."""
     section_re = re.compile(r'(### 💎 Kernconcepten\n)(.*?)(?=\n## |\n#[^#]|\Z)', re.DOTALL)
@@ -664,8 +747,15 @@ def _assign_uncovered_files(clusters: list[dict], all_entries: list[dict]) -> li
 def inject_moc_links(
     clusters: list[dict],
     dry_run: bool = False,
+    moc_depth: int = 1,
+    sub_count: int = 3,
+    max_retries: int = 3,
+    all_entries: list[dict] | None = None,
 ) -> tuple[int, int, int, int, list[dict]]:
     """Maak MOC-bestanden aan (of update ze) en injecteer bidirectionele links.
+
+    moc_depth=1: flat MOC → notes
+    moc_depth=2: top MOC → sub-MOCs → notes
 
     Returns: (mocs_created, mocs_updated, spoke_links_injected, errors, dry_log)
     """
@@ -684,6 +774,9 @@ def inject_moc_links(
     total_ops = sum(1 + len(c.get('spokes', [])) for c in clusters)
     prog = Progress(total_ops, "MOC injectie ")
 
+    # Build entries lookup for depth-2 sub-clustering
+    entries_by_file: dict[str, dict] = {e['file']: e for e in (all_entries or [])}
+
     for cluster in clusters:
         moc_name = (cluster.get('moc_name') or '').strip()
         moc_title = (cluster.get('moc_title') or moc_name).strip()
@@ -696,10 +789,140 @@ def inject_moc_links(
 
         moc_file = f"{moc_name}.md"
         moc_path = os.path.join(moc_dir_abs, moc_file)
-        moc_wikilink = f'[[{moc_name}]]'
 
         prog.peek(f"{moc_name} ({len(spokes)} spokes)")
 
+        # ── Depth-2: sub-MOC hierarchy ────────────────────────────────────────
+        if moc_depth >= 2:
+            spoke_entries = [entries_by_file[s] for s in spokes if s in entries_by_file]
+            sub_clusters = (
+                analyze_for_sub_mocs(moc_name, moc_title, spoke_entries,
+                                     max_retries=max_retries, sub_count=sub_count)
+                if spoke_entries else []
+            )
+
+            if sub_clusters:
+                # Mechanically assign uncovered spokes to first sub-cluster
+                covered = {s for sc in sub_clusters for s in sc.get('spokes', [])}
+                uncovered = [s for s in spokes if s not in covered]
+                if uncovered:
+                    sub_clusters[0].setdefault('spokes', []).extend(uncovered)
+
+                # Write/update top-level MOC (links to sub-MOCs)
+                if dry_run:
+                    dry_log.append({
+                        'action': 'create_top_moc',
+                        'moc': os.path.join(MOC_DIR, moc_file),
+                        'sub_mocs': len(sub_clusters),
+                    })
+                    mocs_created += 1
+                    prog.update(1, f"[DRY] {moc_name} (top)")
+                else:
+                    try:
+                        top_content = _top_moc_template(moc_name, moc_title, sub_clusters)
+                        if not os.path.isfile(moc_path):
+                            with open(moc_path, 'w', encoding='utf-8') as f:
+                                f.write(top_content)
+                            mocs_created += 1
+                            prog.update(1, f"✚ {moc_name} (top)")
+                        else:
+                            with open(moc_path, 'r', encoding='utf-8') as f:
+                                existing = f.read()
+                            if top_content != existing:
+                                with open(moc_path, 'w', encoding='utf-8') as f:
+                                    f.write(top_content)
+                                mocs_updated += 1
+                                prog.update(1, f"↑ {moc_name} (top)")
+                            else:
+                                prog.update(1, f"= {moc_name} (ongewijzigd)")
+                    except Exception as e:
+                        errors += 1
+                        prog.update(1, f"MOC-schrijffout: {e}")
+                        continue
+
+                # Write sub-MOCs and inject links into spoke notes
+                for sc in sub_clusters:
+                    sub_name = (sc.get('sub_moc_name') or '').strip()
+                    sub_title = (sc.get('sub_moc_title') or sub_name).strip()
+                    sub_spokes = [s for s in sc.get('spokes', []) if s]
+                    if not sub_name:
+                        continue
+
+                    sub_file = f"{sub_name}.md"
+                    sub_path = os.path.join(moc_dir_abs, sub_file)
+                    sub_wikilink = f'[[{sub_name}]]'
+
+                    if dry_run:
+                        dry_log.append({
+                            'action': 'create_sub_moc',
+                            'moc': os.path.join(MOC_DIR, sub_file),
+                            'spokes': len(sub_spokes),
+                        })
+                        mocs_created += 1
+                    else:
+                        try:
+                            if not os.path.isfile(sub_path):
+                                with open(sub_path, 'w', encoding='utf-8') as f:
+                                    f.write(_sub_moc_template(sub_name, sub_title, moc_name, sub_spokes))
+                                mocs_created += 1
+                            else:
+                                with open(sub_path, 'r', encoding='utf-8') as f:
+                                    sub_content = f.read()
+                                new_links = [
+                                    f'- [[{os.path.splitext(os.path.basename(s))[0]}]]'
+                                    for s in sub_spokes
+                                ]
+                                updated = _update_moc_kernconcepten(sub_content, new_links)
+                                if updated != sub_content:
+                                    with open(sub_path, 'w', encoding='utf-8') as f:
+                                        f.write(updated)
+                                    mocs_updated += 1
+                        except Exception as e:
+                            errors += 1
+                            continue
+
+                    # Inject [[sub_moc_name]] into each spoke note
+                    for spoke in sub_spokes:
+                        src_path = os.path.join(VAULT_PATH, spoke)
+                        if not os.path.realpath(src_path).startswith(real_vault):
+                            errors += 1
+                            prog.update(1, "path traversal")
+                            continue
+                        if not os.path.isfile(src_path):
+                            prog.update(1, f"spoke geskipt: {spoke}")
+                            continue
+                        try:
+                            with open(src_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                        except Exception as e:
+                            errors += 1
+                            prog.update(1, f"leesfout: {e}")
+                            continue
+                        if sub_wikilink in content:
+                            prog.update(1, "dup")
+                            continue
+                        new_content = _do_inject(content, sub_wikilink, 'Gerelateerd')
+                        if dry_run:
+                            dry_log.append({'action': 'spoke_link', 'source': spoke, 'wikilink': sub_wikilink})
+                            spoke_injected += 1
+                            prog.update(1, f"[DRY] {os.path.basename(spoke)}")
+                        else:
+                            try:
+                                with open(src_path, 'w', encoding='utf-8') as f:
+                                    f.write(new_content)
+                                spoke_injected += 1
+                                prog.update(1)
+                            except Exception as e:
+                                errors += 1
+                                prog.update(1, f"schrijffout: {e}")
+
+                continue  # next cluster — depth-2 done
+
+            # LLM returned empty sub-clusters → fall through to depth-1
+            info(f"  Sub-clustering voor {moc_name} leeg — terugval naar depth-1")
+
+        # ── Depth-1: flat MOC (existing behavior) ─────────────────────────────
+        moc_wikilink = f'[[{moc_name}]]'
         spoke_wikilinks = [
             f'- [[{os.path.splitext(os.path.basename(s))[0]}]]'
             for s in spokes
@@ -931,6 +1154,14 @@ Voorbeelden:
         help="Aantal thematische MOCs (klaverblad-bladen, standaard: 5)",
     )
     parser.add_argument(
+        "--moc-depth", type=int, default=1, metavar="N",
+        help="MOC-hiërarchiediepte: 1=flat (standaard), 2=top-MOC → sub-MOCs → notes",
+    )
+    parser.add_argument(
+        "--sub-moc-count", type=int, default=3, metavar="N",
+        help="Aantal sub-MOCs per top-MOC bij --moc-depth 2 (standaard: 3)",
+    )
+    parser.add_argument(
         "--from-matrix", metavar="FILE",
         help="Sla scan+LLM over en gebruik een bestaand link_matrix.json bestand",
     )
@@ -1061,6 +1292,10 @@ def main():
             mocs_created, mocs_updated, spoke_injected, moc_errors, _ = inject_moc_links(
                 clusters,
                 dry_run=args.dry_run,
+                moc_depth=args.moc_depth,
+                sub_count=args.sub_moc_count,
+                max_retries=args.max_retries,
+                all_entries=entries,
             )
 
             _create_home_moc(clusters, dry_run=args.dry_run)
