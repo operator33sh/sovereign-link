@@ -87,16 +87,17 @@ Als er geen zinvolle links zijn: []
 
 MOC_SYSTEM_PROMPT = """\
 Je bent een vault-architect voor een Obsidian kennisbank in het Nederlands.
-Je krijgt een lijst vault-bestanden (JSON) met bestandsnaam, titel en tags.
+Je krijgt een lijst vault-bestanden (JSON) met bestandsnaam ('file'), titel en tags.
 
-Taak: groepeer de bestanden in 8-20 thematische clusters. Elk cluster krijgt een MOC (Map of Content).
+Taak: groepeer de bestanden in 10-25 thematische clusters. Elk cluster krijgt een MOC (Map of Content).
 
-Regels:
+KRITIEKE REGELS:
+- Gebruik EXACT de 'file'-waarde als spoke-pad — kopieer het letterlijk uit de input, inclusief mapnaam, spaties en extensie (.md). Verzin GEEN bestandsnamen.
 - Elk bestand mag in MAX 2 clusters zitten
 - MOC-naam: korte CamelCase naam zonder spaties, prefix 'MOC_' (bijv. MOC_Fractalisme)
 - moc_title: leesbare Nederlandse naam (bijv. "Fractalisme")
 - Sla bestaande MOC-bestanden (die al 'MOC_' in de naam hebben) over als source
-- Max 30 spokes per MOC
+- Geen limiet op spokes — probeer zo veel mogelijk bestanden te dekken
 
 Geef UITSLUITEND een JSON-array terug, geen uitleg, geen markdown:
 [{"moc_name": "MOC_Thema", "moc_title": "Thema", "spokes": ["map/A.md", "B.md"]}]
@@ -546,6 +547,59 @@ def _update_moc_kernconcepten(content: str, new_links: list[str]) -> str:
     return content[:m.start(2)] + new_block + content[m.end(2):]
 
 
+def _assign_uncovered_files(clusters: list[dict], all_entries: list[dict]) -> list[dict]:
+    """Wijs bestanden zonder MOC toe aan de beste cluster op basis van tag-overlap.
+    Mechanisch — geen LLM-call. Muteert clusters in-place.
+    """
+    covered = {s for c in clusters for s in c.get('spokes', [])}
+
+    # Tag-profiel per cluster (union van alle spoke-tags)
+    cluster_tags: list[set[str]] = []
+    entry_map = {e['file']: e for e in all_entries}
+    for c in clusters:
+        tags: set[str] = set()
+        for spoke in c.get('spokes', []):
+            if spoke in entry_map:
+                tags.update(t.lower() for t in entry_map[spoke].get('tags', []))
+        cluster_tags.append(tags)
+
+    # Naam-keywords per cluster (moc_title + moc_name)
+    cluster_keywords: list[set[str]] = []
+    for c in clusters:
+        words = set(c.get('moc_title', '').lower().split())
+        words.update(c.get('moc_name', '').lower().replace('moc_', '').split('_'))
+        cluster_keywords.append(words)
+
+    assigned = 0
+    for entry in all_entries:
+        f = entry['file']
+        if f in covered or 'MOC_' in os.path.basename(f):
+            continue
+
+        file_tags = set(t.lower() for t in entry.get('tags', []))
+        file_words = set(entry.get('title', '').lower().split())
+
+        best_score = -1.0
+        best_idx = 0
+        for i, (ctags, ckw) in enumerate(zip(cluster_tags, cluster_keywords)):
+            union = file_tags | ctags
+            tag_score = len(file_tags & ctags) / len(union) if union else 0.0
+            kw_score = len(file_words & ckw) / max(len(ckw), 1)
+            score = tag_score * 2 + kw_score
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        clusters[best_idx].setdefault('spokes', []).append(f)
+        cluster_tags[best_idx].update(file_tags)
+        covered.add(f)
+        assigned += 1
+
+    if assigned:
+        info(f"Fallback: {assigned} ongedekte bestanden toegewezen op basis van tag-overlap")
+    return clusters
+
+
 def inject_moc_links(
     clusters: list[dict],
     dry_run: bool = False,
@@ -632,8 +686,7 @@ def inject_moc_links(
                 prog.update(1, "path traversal")
                 continue
             if not os.path.isfile(src_path):
-                errors += 1
-                prog.update(1, f"spoke niet gevonden: {spoke}")
+                prog.update(1, f"spoke geskipt (niet gevonden): {spoke}")
                 continue
             try:
                 with open(src_path, 'r', encoding='utf-8') as f:
@@ -852,6 +905,7 @@ def main():
                 sys.exit(1)
 
         clusters = analyze_for_mocs(entries, max_retries=args.max_retries)
+        clusters = _assign_uncovered_files(clusters, entries)
 
         if not clusters:
             warn("Geen MOC-clusters gevonden — MOC-pipeline overgeslagen")
