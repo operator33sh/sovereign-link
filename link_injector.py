@@ -386,6 +386,64 @@ def analyze_for_mocs(entries: list[dict], max_retries: int, moc_count: int = 5) 
         return []
 
 
+# ── Stap 2b: Links strippen ──────────────────────────────────────────────────
+
+_WIKILINK_RE = re.compile(r'\[\[[^\]]*\]\]')
+_EMPTY_GERELATEERD_RE = re.compile(
+    r'^#{1,3}\s+Gerelateerd\s*\n(?:\s*\n)*(?=#{1,3}|\Z)',
+    re.MULTILINE,
+)
+
+
+def _strip_wikilinks(content: str) -> str:
+    """Verwijder alle [[wikilinks]] uit content en ruim lege secties op."""
+    # Verwijder wikilinks
+    stripped = _WIKILINK_RE.sub('', content)
+    # Verwijder lege bullet-regels die overblijven (alleen "- " of "- \n")
+    stripped = re.sub(r'^- \s*$', '', stripped, flags=re.MULTILINE)
+    # Verwijder lege ## Gerelateerd secties
+    stripped = _EMPTY_GERELATEERD_RE.sub('', stripped)
+    # Comprimeer drie of meer opeenvolgende lege regels naar twee
+    stripped = re.sub(r'\n{3,}', '\n\n', stripped)
+    return stripped
+
+
+def strip_all_links(dry_run: bool = False, directory: str = "") -> int:
+    """Strip alle [[wikilinks]] uit vault-bestanden. Geeft aantal gewijzigde bestanden terug."""
+    real_vault = os.path.realpath(VAULT_PATH)
+    scan_root = os.path.join(VAULT_PATH, directory) if directory else VAULT_PATH
+
+    all_md: list[str] = []
+    for root, dirs, files in os.walk(scan_root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+        for fname in files:
+            if fname.endswith('.md'):
+                all_md.append(os.path.join(root, fname))
+
+    prog = Progress(len(all_md), "Links strippen")
+    modified = 0
+
+    for full_path in sorted(all_md):
+        if not os.path.realpath(full_path).startswith(real_vault):
+            prog.update(1)
+            continue
+        try:
+            with open(full_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            new_content = _strip_wikilinks(content)
+            if new_content != content:
+                if not dry_run:
+                    with open(full_path, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+                modified += 1
+            prog.update(1)
+        except Exception as e:
+            prog.update(1, f"fout: {e}")
+
+    prog.finish(f"— {modified} bestanden gewijzigd" + (" [DRY-RUN]" if dry_run else ""))
+    return modified
+
+
 # ── Stap 3: Mechanische injectie ─────────────────────────────────────────────
 
 def _insert_before_timestamps(content: str, text: str) -> str:
@@ -857,6 +915,10 @@ Voorbeelden:
         help="Max LLM-retries per chunk bij 429/503/timeout (standaard: 3)",
     )
     parser.add_argument(
+        "--strip-links", action="store_true",
+        help="Strip eerst alle bestaande [[wikilinks]] uit de vault vóór nieuwe injectie",
+    )
+    parser.add_argument(
         "--uncovered-only", action="store_true",
         help="Analyseer alleen bestanden die nog geen [[wikilinks]] bevatten",
     )
@@ -890,6 +952,12 @@ def main():
     if args.dry_run:
         print("  Modus : DRY-RUN (geen wijzigingen in vault)")
     print(f"{'═'*TERM_WIDTH}")
+
+    # ── Stap 0: Strip bestaande links (optioneel) ─────────────────────────────
+    if args.strip_links:
+        section("STAP 0: Bestaande [[wikilinks]] strippen" + (" [DRY-RUN]" if args.dry_run else ""))
+        n_stripped = strip_all_links(dry_run=args.dry_run, directory=args.directory)
+        info(f"{n_stripped} bestanden ontdaan van wikilinks")
 
     # ── Stap 1: Scan of laad bestaande matrix ─────────────────────────────────
     if args.from_matrix:
