@@ -294,11 +294,29 @@ def _insert_gerelateerd_section(content: str, wikilink: str) -> str:
     return _insert_before_timestamps(content, block)
 
 
-def build_vault_map() -> str:
-    """Scan the entire vault and write a compact metadata map to .agent_temp/vault_map.json."""
+def build_vault_map(
+    directory: str = "",
+    max_preview_words: int = 50,
+) -> str:
+    """Scan vault (or a subdirectory) and write a metadata map to .agent_temp/vault_map.json.
+
+    Args:
+        directory: Relative subpath within the vault to scan (e.g. '10_Kern').
+                   Empty string (default) scans the entire vault.
+        max_preview_words: Max words to include in each file's preview (default 50).
+                           Use lower values (20-50) to keep the map LLM-readable in one pass.
+                           Use up to 200 for deep analysis of a small directory.
+    """
+    scan_root = os.path.join(VAULT_PATH, directory) if directory else VAULT_PATH
+    real_vault = os.path.realpath(VAULT_PATH)
+    if not os.path.realpath(scan_root).startswith(real_vault):
+        return "Error: path traversal not allowed"
+    if not os.path.isdir(scan_root):
+        return f"Error: '{directory}' is not a directory in the vault"
+
     entries = []
 
-    for root, dirs, files in os.walk(VAULT_PATH):
+    for root, dirs, files in os.walk(scan_root):
         # Skip hidden dirs (including .agent_temp, .obsidian, .git)
         dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
 
@@ -324,7 +342,7 @@ def build_vault_map() -> str:
             # Tags: #word patterns (deduplicated, capped at 20)
             tags = list(dict.fromkeys('#' + m for m in _TAG_PATTERN.findall(raw)))[:20]
 
-            # Preview: first 200 words of body text (skip frontmatter, headings, blank lines)
+            # Preview: first N words of body text (skip frontmatter, headings, blank lines)
             body_start = 0
             if raw.startswith('---'):
                 end = raw.find('\n---', 3)
@@ -337,14 +355,14 @@ def build_vault_map() -> str:
                 if not stripped or stripped.startswith('#'):
                     continue
                 body_words.extend(stripped.split())
-                if len(body_words) >= 200:
+                if len(body_words) >= max_preview_words:
                     break
 
             entries.append({
                 'file': rel_path,
                 'title': title,
                 'tags': tags,
-                'preview': ' '.join(body_words[:200]),
+                'preview': ' '.join(body_words[:max_preview_words]),
             })
 
     os.makedirs(AGENT_TEMP_PATH, exist_ok=True)
@@ -1331,17 +1349,33 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "build_vault_map",
             "description": (
-                "Scan de gehele vault en schrijf een compacte metadata-map naar "
-                ".agent_temp/vault_map.json. Elke entry bevat: 'file' (relatief pad), "
-                "'title' (eerste # heading of bestandsnaam), 'tags' (hashtag-stijl), "
-                "en 'preview' (eerste 200 woorden body-tekst). "
-                "Gebruik dit als eerste stap van de Mechanical Link Injector pipeline: "
-                "laat de LLM de map analyseren en een Link Matrix genereren, "
-                "voer daarna inject_links uit voor de mechanische batch-injectie."
+                "Scan de vault (of een submap) en schrijf een compacte metadata-map naar "
+                ".agent_temp/vault_map.json. Elke entry: 'file', 'title', 'tags', 'preview'. "
+                "Gebruik 'directory' om alleen een submap te scannen (aanbevolen voor grote vaults). "
+                "Gebruik 'max_preview_words' om de map klein genoeg te houden voor één LLM-call "
+                "(standaard 50 woorden ≈ ~40k tokens voor 992 bestanden). "
+                "Workflow: build_vault_map → LLM analyseert → inject_links voert batch uit."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "directory": {
+                        "type": "string",
+                        "description": (
+                            "Relatief pad binnen de vault om te scannen, bijv. '10_Kern'. "
+                            "Leeg (standaard) = hele vault. Gebruik dit om de map in behapbare "
+                            "stukken op te splitsen voor grote vaults."
+                        ),
+                    },
+                    "max_preview_words": {
+                        "type": "integer",
+                        "description": (
+                            "Max aantal woorden per bestand in de preview (standaard: 50). "
+                            "Gebruik 20-50 voor vault-brede analyse in één LLM-call. "
+                            "Gebruik tot 200 voor diepgaande analyse van een kleine submap."
+                        ),
+                    },
+                },
                 "required": [],
             },
         },
@@ -1638,7 +1672,7 @@ TOOL_DEFINITIONS = [
 ]
 
 TOOL_HANDLERS = {
-    "build_vault_map": lambda args: build_vault_map(),
+    "build_vault_map": lambda args: build_vault_map(args.get("directory", ""), args.get("max_preview_words", 50)),
     "inject_links": lambda args: inject_links(args["link_matrix_json"]),
     "read_vault": lambda args: read_vault(args["file_name"]),
     "write_vault": lambda args: write_vault(args["file_name"], args["content"]),
