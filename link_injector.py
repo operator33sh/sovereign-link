@@ -89,18 +89,20 @@ MOC_SYSTEM_PROMPT = """\
 Je bent een vault-architect voor een Obsidian kennisbank in het Nederlands.
 Je krijgt een lijst vault-bestanden (JSON) met bestandsnaam ('file'), titel en tags.
 
-Taak: groepeer de bestanden in 10-25 thematische clusters. Elk cluster krijgt een MOC (Map of Content).
+Taak: groepeer de bestanden in PRECIES {moc_count} thematische clusters. Elk cluster krijgt één MOC (Map of Content).
+Dit vormt een klaverblad-structuur: één centraal Home-MOC linkt naar {moc_count} thematische MOCs, die elk linken naar de bijbehorende notes.
 
 KRITIEKE REGELS:
+- Maak PRECIES {moc_count} clusters — niet meer, niet minder
 - Gebruik EXACT de 'file'-waarde als spoke-pad — kopieer het letterlijk uit de input, inclusief mapnaam, spaties en extensie (.md). Verzin GEEN bestandsnamen.
 - Elk bestand mag in MAX 2 clusters zitten
 - MOC-naam: korte CamelCase naam zonder spaties, prefix 'MOC_' (bijv. MOC_Fractalisme)
 - moc_title: leesbare Nederlandse naam (bijv. "Fractalisme")
 - Sla bestaande MOC-bestanden (die al 'MOC_' in de naam hebben) over als source
-- Geen limiet op spokes — probeer zo veel mogelijk bestanden te dekken
+- Geen limiet op spokes — probeer zo veel mogelijk bestanden te dekken, verdeel ze evenwichtig
 
 Geef UITSLUITEND een JSON-array terug, geen uitleg, geen markdown:
-[{"moc_name": "MOC_Thema", "moc_title": "Thema", "spokes": ["map/A.md", "B.md"]}]
+[{{"moc_name": "MOC_Thema", "moc_title": "Thema", "spokes": ["map/A.md", "B.md"]}}]
 
 Als er geen clusters zijn: []
 """
@@ -363,14 +365,15 @@ def analyze_vault_map(
     return all_links
 
 
-def analyze_for_mocs(entries: list[dict], max_retries: int) -> list[dict]:
+def analyze_for_mocs(entries: list[dict], max_retries: int, moc_count: int = 5) -> list[dict]:
     """Één LLM-call: groepeer alle vault-entries in thematische MOC-clusters."""
     condensed = [{'file': e['file'], 'title': e['title'], 'tags': e['tags']} for e in entries]
     condensed = [e for e in condensed if 'MOC_' not in os.path.basename(e['file'])]
 
-    info(f"MOC-analyse: {len(condensed)} bestanden in één LLM-call...")
+    info(f"MOC-analyse: {len(condensed)} bestanden → {moc_count} clusters (één LLM-call)...")
+    prompt = MOC_SYSTEM_PROMPT.format(moc_count=moc_count)
     messages = [
-        {"role": "system", "content": MOC_SYSTEM_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": json.dumps(condensed, ensure_ascii=False)},
     ]
     try:
@@ -721,6 +724,69 @@ def inject_moc_links(
     return mocs_created, mocs_updated, spoke_injected, errors, dry_log
 
 
+def _create_home_moc(clusters: list[dict], dry_run: bool = False) -> bool:
+    """Maak of update de centrale Home MOC die naar alle thematische MOCs linkt.
+
+    De Home MOC vormt het middelpunt van de klaverblad-structuur.
+    Returns True als aangemaakt/bijgewerkt, False bij fout.
+    """
+    moc_dir_abs = os.path.join(VAULT_PATH, MOC_DIR)
+    home_path = os.path.join(moc_dir_abs, "MOC_Home.md")
+
+    moc_links = "\n".join(
+        f"- [[{c['moc_name']}]] — {c.get('moc_title', c['moc_name'])}"
+        for c in clusters
+        if c.get('moc_name', '').startswith('MOC_')
+    )
+
+    content = f"""\
+# 🏠 Home MOC
+
+Centraal overzicht van alle thematische kennisgebieden.
+
+## 🍀 Thematische MOCs
+
+{moc_links}
+"""
+
+    if dry_run:
+        info(f"[DRY] Home MOC: {len(clusters)} thematische MOCs gelinkt")
+        return True
+
+    try:
+        os.makedirs(moc_dir_abs, exist_ok=True)
+        if os.path.isfile(home_path):
+            with open(home_path, 'r', encoding='utf-8') as f:
+                existing = f.read()
+            # Voeg nieuwe MOC-links toe die nog ontbreken
+            new_links = []
+            for c in clusters:
+                name = c.get('moc_name', '')
+                if name.startswith('MOC_') and f'[[{name}]]' not in existing:
+                    new_links.append(f"- [[{name}]] — {c.get('moc_title', name)}")
+            if new_links:
+                insert = '\n'.join(new_links)
+                # Voeg in na "## 🍀 Thematische MOCs" sectie
+                m = re.search(r'^## 🍀 Thematische MOCs\s*$', existing, re.MULTILINE)
+                if m:
+                    updated = existing[:m.end()].rstrip() + '\n\n' + insert + '\n' + existing[m.end():]
+                else:
+                    updated = existing.rstrip() + '\n\n' + insert + '\n'
+                with open(home_path, 'w', encoding='utf-8') as f:
+                    f.write(updated)
+                info(f"Home MOC bijgewerkt: {len(new_links)} nieuwe links toegevoegd")
+            else:
+                info("Home MOC: geen nieuwe MOC-links")
+        else:
+            with open(home_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            info(f"Home MOC aangemaakt: {home_path}")
+        return True
+    except Exception as e:
+        warn(f"Home MOC aanmaken mislukt: {e}")
+        return False
+
+
 # ── Samenvatting ─────────────────────────────────────────────────────────────
 
 def print_summary(
@@ -797,6 +863,10 @@ Voorbeelden:
     parser.add_argument(
         "--create-mocs", action="store_true",
         help="MOC-modus: groepeer vault in clusters, maak MOC-bestanden aan, injecteer bidirectionele links",
+    )
+    parser.add_argument(
+        "--moc-count", type=int, default=5, metavar="N",
+        help="Aantal thematische MOCs (klaverblad-bladen, standaard: 5)",
     )
     parser.add_argument(
         "--from-matrix", metavar="FILE",
@@ -904,7 +974,7 @@ def main():
                 error(f"Scan mislukt: {e}")
                 sys.exit(1)
 
-        clusters = analyze_for_mocs(entries, max_retries=args.max_retries)
+        clusters = analyze_for_mocs(entries, max_retries=args.max_retries, moc_count=args.moc_count)
         clusters = _assign_uncovered_files(clusters, entries)
 
         if not clusters:
@@ -925,12 +995,15 @@ def main():
                 dry_run=args.dry_run,
             )
 
+            _create_home_moc(clusters, dry_run=args.dry_run)
+
             section("MOC SAMENVATTING")
             info(f"MOC-bestanden aangemaakt : {mocs_created}")
             info(f"MOC-bestanden bijgewerkt : {mocs_updated}")
             info(f"Spoke-links geïnjecteerd : {spoke_injected}")
             info(f"Fouten                   : {moc_errors}")
             info(f"MOC-map                  : {os.path.join(VAULT_PATH, MOC_DIR)}/")
+            info(f"Home MOC                 : {os.path.join(VAULT_PATH, MOC_DIR, 'MOC_Home.md')}")
             if moc_errors > 0:
                 warn(f"{moc_errors} fouten in MOC-pipeline.")
             errors += moc_errors
