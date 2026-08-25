@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import re
 import subprocess
 from datetime import datetime
 from urllib.parse import urlparse
@@ -268,6 +270,191 @@ def delete_file(file_path: str) -> str:
         return f"Deleted '{file_path}'"
     except Exception as e:
         return f"Error deleting file: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Mechanical Link Injector
+# ---------------------------------------------------------------------------
+
+_TS_PATTERN = re.compile(r'#\d{4}-\d{2}-\d{2}(?:\s+#\d{2})+\s*$', re.MULTILINE)
+_TAG_PATTERN = re.compile(r'(?<!\d)#([A-Za-zÀ-ÿ]\w*)')
+
+
+def _insert_before_timestamps(content: str, text: str) -> str:
+    """Insert text before trailing timestamp tags, or append at end of file."""
+    m = _TS_PATTERN.search(content)
+    if m:
+        return content[:m.start()].rstrip() + f'\n{text}\n\n' + content[m.start():]
+    return content.rstrip() + f'\n{text}\n'
+
+
+def _insert_gerelateerd_section(content: str, wikilink: str) -> str:
+    """Create a ## Gerelateerd section with the wikilink before timestamp tags."""
+    block = f'## Gerelateerd\n{wikilink}'
+    return _insert_before_timestamps(content, block)
+
+
+def build_vault_map() -> str:
+    """Scan the entire vault and write a compact metadata map to .agent_temp/vault_map.json."""
+    entries = []
+
+    for root, dirs, files in os.walk(VAULT_PATH):
+        # Skip hidden dirs (including .agent_temp, .obsidian, .git)
+        dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+
+        for fname in sorted(files):
+            if not fname.endswith('.md'):
+                continue
+            full_path = os.path.join(root, fname)
+            rel_path = os.path.relpath(full_path, VAULT_PATH)
+
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    raw = f.read()
+            except Exception:
+                continue
+
+            # Title: first '# ' heading, fallback to filename stem
+            title = os.path.splitext(fname)[0]
+            for line in raw.splitlines():
+                if line.startswith('# '):
+                    title = line[2:].strip()
+                    break
+
+            # Tags: #word patterns (deduplicated, capped at 20)
+            tags = list(dict.fromkeys('#' + m for m in _TAG_PATTERN.findall(raw)))[:20]
+
+            # Preview: first 200 words of body text (skip frontmatter, headings, blank lines)
+            body_start = 0
+            if raw.startswith('---'):
+                end = raw.find('\n---', 3)
+                if end != -1:
+                    body_start = end + 4
+
+            body_words: list[str] = []
+            for line in raw[body_start:].splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+                body_words.extend(stripped.split())
+                if len(body_words) >= 200:
+                    break
+
+            entries.append({
+                'file': rel_path,
+                'title': title,
+                'tags': tags,
+                'preview': ' '.join(body_words[:200]),
+            })
+
+    os.makedirs(AGENT_TEMP_PATH, exist_ok=True)
+    map_path = os.path.join(AGENT_TEMP_PATH, 'vault_map.json')
+    try:
+        with open(map_path, 'w', encoding='utf-8') as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error writing vault_map.json: {e}"
+
+    return f"Vault map gebouwd: {len(entries)} bestanden → {map_path}"
+
+
+def inject_links(link_matrix_json: str) -> str:
+    """Mechanically inject [[wikilinks]] into vault files based on a Link Matrix JSON array.
+
+    Expected input format:
+        [{"source": "path/A.md", "target": "path/B", "context": "Gerelateerd"}]
+
+    Each entry is processed with direct filesystem writes — no LLM call per injection.
+    """
+    try:
+        matrix = json.loads(link_matrix_json)
+    except json.JSONDecodeError as e:
+        return f"Error: ongeldige JSON: {e}"
+    if not isinstance(matrix, list):
+        return "Error: link_matrix_json moet een JSON-array zijn"
+
+    real_vault = os.path.realpath(VAULT_PATH)
+    injected = 0
+    skipped = 0
+    errors = 0
+    modified: set[str] = set()
+
+    for entry in matrix:
+        source = (entry.get('source') or '').strip()
+        target = (entry.get('target') or '').strip()
+        context = (entry.get('context') or '').strip()
+
+        if not source or not target:
+            errors += 1
+            continue
+
+        src_path = os.path.join(VAULT_PATH, source)
+        if not os.path.realpath(src_path).startswith(real_vault):
+            errors += 1
+            continue
+        if not os.path.isfile(src_path):
+            errors += 1
+            continue
+
+        try:
+            with open(src_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception:
+            errors += 1
+            continue
+
+        wikilink = f'[[{target}]]'
+
+        # Skip duplicates
+        if wikilink in content:
+            skipped += 1
+            continue
+
+        # --- Insertion logic ---
+        inserted = False
+
+        if context:
+            # Try to find the named section
+            section_pat = re.compile(
+                r'^#{1,3}\s+' + re.escape(context) + r'\s*$',
+                re.IGNORECASE | re.MULTILINE,
+            )
+            sm = section_pat.search(content)
+            if sm:
+                # Find the next heading after this section
+                next_h = re.search(r'^#{1,3}\s', content[sm.end():], re.MULTILINE)
+                if next_h:
+                    cut = sm.end() + next_h.start()
+                    content = content[:cut].rstrip() + f'\n{wikilink}\n\n' + content[cut:]
+                else:
+                    content = _insert_before_timestamps(content, wikilink)
+                inserted = True
+
+        if not inserted:
+            # Look for existing ## Gerelateerd section
+            gm = re.search(r'^#{1,3}\s+Gerelateerd\s*$', content, re.IGNORECASE | re.MULTILINE)
+            if gm:
+                next_h = re.search(r'^#{1,3}\s', content[gm.end():], re.MULTILINE)
+                if next_h:
+                    cut = gm.end() + next_h.start()
+                    content = content[:cut].rstrip() + f'\n{wikilink}\n\n' + content[cut:]
+                else:
+                    content = _insert_before_timestamps(content, wikilink)
+            else:
+                content = _insert_gerelateerd_section(content, wikilink)
+
+        try:
+            with open(src_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            injected += 1
+            modified.add(src_path)
+        except Exception:
+            errors += 1
+
+    return (
+        f"{injected} links geïnjecteerd in {len(modified)} bestanden "
+        f"| {skipped} duplicaten geskipt | {errors} fouten"
+    )
 
 
 def search_timeline(
@@ -1142,6 +1329,55 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "build_vault_map",
+            "description": (
+                "Scan de gehele vault en schrijf een compacte metadata-map naar "
+                ".agent_temp/vault_map.json. Elke entry bevat: 'file' (relatief pad), "
+                "'title' (eerste # heading of bestandsnaam), 'tags' (hashtag-stijl), "
+                "en 'preview' (eerste 200 woorden body-tekst). "
+                "Gebruik dit als eerste stap van de Mechanical Link Injector pipeline: "
+                "laat de LLM de map analyseren en een Link Matrix genereren, "
+                "voer daarna inject_links uit voor de mechanische batch-injectie."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inject_links",
+            "description": (
+                "Injecteer [[wikilinks]] mechanisch in vault-bestanden op basis van een Link Matrix. "
+                "Voert honderden link-injecties uit via directe filesystem-writes — "
+                "geen LLM-call per bestand. "
+                "Link Matrix formaat: [{\"source\": \"pad/A.md\", \"target\": \"pad/B\", \"context\": \"Gerelateerd\"}]. "
+                "'context' is optioneel: bij een sectienaam wordt de link daar ingevoegd; "
+                "anders wordt een ## Gerelateerd sectie aangemaakt/gebruikt onderaan het bestand. "
+                "Duplicaten worden automatisch geskipt. "
+                "Geeft een samenvatting: geïnjecteerd | geskipt | fouten."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "link_matrix_json": {
+                        "type": "string",
+                        "description": (
+                            "JSON-string met een array van link-entries. "
+                            "Formaat: [{\"source\": \"relatief/pad.md\", \"target\": \"doel/bestand\", \"context\": \"sectienaam of leeg\"}]"
+                        ),
+                    },
+                },
+                "required": ["link_matrix_json"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_swarm",
             "description": (
                 "Start a rhizomatic peer swarm where agents collaborate on a shared Blackboard. "
@@ -1402,6 +1638,8 @@ TOOL_DEFINITIONS = [
 ]
 
 TOOL_HANDLERS = {
+    "build_vault_map": lambda args: build_vault_map(),
+    "inject_links": lambda args: inject_links(args["link_matrix_json"]),
     "read_vault": lambda args: read_vault(args["file_name"]),
     "write_vault": lambda args: write_vault(args["file_name"], args["content"]),
     "sync_vault": lambda args: sync_vault(),
