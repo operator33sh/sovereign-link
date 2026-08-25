@@ -33,12 +33,23 @@ _embed_client = httpx.Client(timeout=60.0)
 
 
 def _embed(text: str) -> list:
-    response = _embed_client.post(
-        f"{EMBED_BASE_URL}/api/embeddings",
-        json={"model": EMBED_MODEL, "prompt": text},
-    )
-    response.raise_for_status()
-    return response.json()["embedding"]
+    global _embed_client
+    try:
+        response = _embed_client.post(
+            f"{EMBED_BASE_URL}/api/embeddings",
+            json={"model": EMBED_MODEL, "prompt": text},
+        )
+        response.raise_for_status()
+        return response.json()["embedding"]
+    except (httpx.ReadError, httpx.RemoteProtocolError):
+        # Broken socket — recreate client and retry once
+        _embed_client = httpx.Client(timeout=60.0)
+        response = _embed_client.post(
+            f"{EMBED_BASE_URL}/api/embeddings",
+            json={"model": EMBED_MODEL, "prompt": text},
+        )
+        response.raise_for_status()
+        return response.json()["embedding"]
 
 
 def _chunk(text: str, file_name: str) -> list:

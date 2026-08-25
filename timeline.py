@@ -134,9 +134,13 @@ def _extract_session_id(file_path: str) -> str | None:
     return m.group(1) if m else None
 
 
-# Module-level connection (lazy, thread-safe via SQLite WAL)
+# Module-level connection (lazy); serialised via _write_lock for thread safety.
+# check_same_thread=False allows the connection object to be *held* across threads,
+# but SQLite connections are NOT safe for concurrent use — _write_lock serialises all
+# writes so only one thread executes+commits at a time.
 _conn: sqlite3.Connection | None = None
 _conn_lock = __import__("threading").Lock()
+_write_lock = __import__("threading").Lock()
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -165,22 +169,23 @@ def index_file(file_path: str, content: str, timestamp: str) -> None:
         session_id = _extract_session_id(file_path)
         indexed_at = datetime.now().isoformat()
 
-        conn = _get_conn()
-        conn.execute(
-            """
-            INSERT INTO entries (file_path, date, time, datetime_iso, session_id, content, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(file_path) DO UPDATE SET
-                date=excluded.date,
-                time=excluded.time,
-                datetime_iso=excluded.datetime_iso,
-                session_id=excluded.session_id,
-                content=excluded.content,
-                indexed_at=excluded.indexed_at
-            """,
-            (file_path, date_str, time_str, datetime_iso, session_id, content, indexed_at),
-        )
-        conn.commit()
+        with _write_lock:
+            conn = _get_conn()
+            conn.execute(
+                """
+                INSERT INTO entries (file_path, date, time, datetime_iso, session_id, content, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_path) DO UPDATE SET
+                    date=excluded.date,
+                    time=excluded.time,
+                    datetime_iso=excluded.datetime_iso,
+                    session_id=excluded.session_id,
+                    content=excluded.content,
+                    indexed_at=excluded.indexed_at
+                """,
+                (file_path, date_str, time_str, datetime_iso, session_id, content, indexed_at),
+            )
+            conn.commit()
         logger.debug("timeline: indexed %s (%s %s)", file_path, date_str, time_str)
     except Exception:
         logger.exception("timeline: failed to index %s", file_path)
