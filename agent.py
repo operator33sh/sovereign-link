@@ -116,6 +116,28 @@ You are part of a peer swarm working on project '{project_id}' as a '{role}'.
   (e.g. a 'Skeptic' if you need your hypothesis challenged). Max swarm size: {swarm_size}.
 - You do NOT manage other agents — you collaborate as equals.
 - When done, post your final conclusion to the blackboard and declare GOAL_COMPLETE.
+
+## Mandatory Evidence Loop — VERPLICHT
+Elke tool-call die een permanente wijziging aanbrengt (`write_vault`, `move_file`, `delete_file`)
+MOET onmiddellijk gevolgd worden door een `write_blackboard` entry. Een actie is pas 'voltooid'
+als het bewijs op het blackboard staat. Sla NOOIT GOAL_COMPLETE op voordat alle vault-acties
+zijn gelogd op het blackboard.
+
+Gebruik het volgende formaat voor elke blackboard-entry na een vault-actie:
+  `[ACTIE] | [BESTAND] | [RESULTAAT/WIJZIGING]`
+
+Voorbeelden:
+  `WRITE_VAULT | concepts/recursive-autonomy.md | Nieuw inzicht aangemaakt: definitie van recursieve autonomie`
+  `MOVE_FILE | drafts/idee.md → concepts/idee.md | Verplaatst van draft naar definitieve locatie`
+  `DELETE_FILE | temp/oud-fragment.md | Verouderd fragment verwijderd na synthese`
+
+## Read-Modify-Write Safeguard
+Wanneer je een bestaand vault-bestand moet updaten, volg dan ALTIJD dit protocol:
+1. LEZEN — roep `read_vault` aan op het doelbestand en sla de volledige inhoud op.
+2. TRANSFORMEREN — voer de wijziging door in je redenering (voeg toe, pas aan, verwijder secties).
+3. SCHRIJVEN — roep `write_vault` aan met de VOLLEDIGE gecombineerde inhoud (oud + nieuw).
+Schrijf NOOIT alleen de nieuwe sectie; dit overschrijft bestaande inhoud. Bij grote bestanden
+(>500 regels): verwerk in logische blokken en log elk blok apart op het blackboard.
 """
 
 
@@ -640,11 +662,23 @@ class SwarmCoordinator:
         synthesis_goal = (
             f"Read the full blackboard for project '{self.project_id}' using "
             f"read_blackboard with project_id='{self.project_id}'. "
-            f"Synthesize all peer findings into a coherent conclusion. "
-            f"Resolve contradictions, identify emergent patterns, and write the final synthesis "
-            f"using write_temp with file_name='swarm_synthesis/{self.project_id}_synthesis.md'."
-            + (f" IMPORTANT NOTE: {failure_note}" if failure_note else "")
-            + " Then declare GOAL_COMPLETE."
+            f"IMPORTANT — Synthesis Validation Protocol:\n"
+            f"1. Als het blackboard leeg is ('Blackboard is empty' of geen fragments), "
+            f"rapporteer dit NIET als 'geen bevindingen'. Schrijf in plaats daarvan een "
+            f"'PROTOCOL FAILURE'-rapport: vermeld dat peer-agents als voltooid zijn gemarkeerd "
+            f"maar geen blackboard-entries hebben aangemaakt, wat duidt op een 'Silent Execution' "
+            f"fout (vault-acties zonder blackboard-bewijs). Lijst alle peers op die GOAL_COMPLETE "
+            f"hebben gemeld zonder begeleidende blackboard-entries.\n"
+            f"2. Als het blackboard WEL entries heeft, controleer dan of alle vault-acties "
+            f"(write_vault/move_file/delete_file) zijn gedocumenteerd in het formaat "
+            f"'[ACTIE] | [BESTAND] | [RESULTAAT]'. Maak een exacte lijst van alle vault-wijzigingen.\n"
+            f"3. Synthesiseer alle peer-bevindingen tot een coherente conclusie, los "
+            f"tegenspraken op, identificeer emergente patronen, en schrijf de eindrapportage "
+            f"met write_temp via file_name='swarm_synthesis/{self.project_id}_synthesis.md'. "
+            f"De rapportage moet bevatten: (a) Vault-wijzigingenlijst, (b) Inhoudelijke synthese, "
+            f"(c) Protocol-status (OK of FAILURE met uitleg)."
+            + (f"\nBELANGRIJKE NOOT: {failure_note}" if failure_note else "")
+            + "\nDeclare GOAL_COMPLETE na het schrijven van het syntheserapport."
         )
         agent = BackgroundAgent(
             goal=synthesis_goal,
