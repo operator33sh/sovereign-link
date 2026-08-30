@@ -26,7 +26,7 @@ _RETRY_CONTEXT_PREFIX = (
     "blokkade zat en probeer een alternatieve route naar het doel."
 )
 
-from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH, PROJECT_LOGS_PATH
+from tools import TOOL_DEFINITIONS, AGENT_TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH, PROJECT_LOGS_PATH
 
 # Execution logs — outside the vault, never indexed or synced
 LOGS_PATH = os.path.join(PROJECT_LOGS_PATH, "agents")
@@ -204,7 +204,7 @@ class BackgroundAgent:
         payload = {
             "model": model,
             "messages": self._messages,
-            "tools": TOOL_DEFINITIONS,
+            "tools": AGENT_TOOL_DEFINITIONS,
             "stream": False,
         }
         client = httpx.Client(base_url=base_url, headers=headers, timeout=_AGENT_LLM_TIMEOUT)

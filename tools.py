@@ -12,10 +12,10 @@ from vector import search_vault_semantic as _search_vault_semantic
 logger = logging.getLogger(__name__)
 
 VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
-AGENT_TEMP_PATH = os.path.join(VAULT_PATH, ".agent_temp")
 
 # Project-level log root — execution/process data lives here, never in the vault
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+AGENT_TEMP_PATH = os.path.join(PROJECT_ROOT, ".agent_temp")
 PROJECT_LOGS_PATH = os.path.join(PROJECT_ROOT, "logs")
 
 # Runtime state (session-scoped temp files like ACL) — outside the vault so the
@@ -1931,3 +1931,14 @@ def _swarm_spawn(
         roles=roles, swarm_size=swarm_size,
         context_injector=injector, llm_trigger=trigger,
     )
+
+
+# Tools exposed to sub-agents — write_vault is excluded so agents can never
+# write directly to the vault. Intermediate notes go to write_temp; finalized
+# content is published via commit_to_vault only.
+_AGENT_EXCLUDED_TOOLS = {"write_vault"}
+
+AGENT_TOOL_DEFINITIONS = [
+    t for t in TOOL_DEFINITIONS
+    if t.get("function", {}).get("name") not in _AGENT_EXCLUDED_TOOLS
+]
