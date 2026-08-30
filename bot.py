@@ -82,7 +82,8 @@ def _delete_session_draft() -> None:
 
 
 def _strip_timestamps(text: str) -> str:
-    return re.sub(r"\n\[[^\]]{10,}\]", "", text)
+    result = re.sub(r"\n\[[^\]]{10,}\]", "", text).strip()
+    return result or "…"
 
 
 def _is_authorized(update: Update) -> bool:
