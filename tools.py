@@ -272,6 +272,55 @@ def sync_vault() -> str:
         return f"Error during sync: {e}"
 
 
+def http_request(
+    method: str,
+    url: str,
+    headers: dict | None = None,
+    body=None,
+) -> str:
+    """Perform an HTTP request and return status code + response body."""
+    import urllib.request
+    import urllib.error
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return "Error: only HTTP/HTTPS URLs are allowed"
+
+    method = method.upper()
+    if method not in ("GET", "POST", "PUT", "DELETE", "PATCH"):
+        return f"Error: unsupported HTTP method '{method}'"
+
+    # Serialize body
+    data: bytes | None = None
+    if body is not None:
+        if isinstance(body, (dict, list)):
+            data = json.dumps(body).encode("utf-8")
+            if headers is None:
+                headers = {}
+            headers.setdefault("Content-Type", "application/json")
+        elif isinstance(body, str):
+            data = body.encode("utf-8")
+
+    req = urllib.request.Request(url, data=data, method=method)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            status = resp.status
+            response_body = resp.read().decode("utf-8", errors="replace")
+            return f"Status: {status}\n\n{response_body[:8000]}"
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode("utf-8", errors="replace")[:2000]
+        return f"HTTP Error {e.code}: {e.reason}\n\n{body_text}"
+    except urllib.error.URLError as e:
+        return f"Error: request failed — {e.reason}"
+    except TimeoutError:
+        return "Error: request timed out after 30 seconds"
+    except Exception as e:
+        return f"Error: {e}"
+
+
 def analyze_website(url: str) -> str:
     from browser import fetch_with_browser_fallback
     parsed = urlparse(url)
@@ -833,6 +882,48 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {},
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": (
+                "Perform an HTTP request (GET, POST, PUT, DELETE, PATCH) to any URL. "
+                "Use this to interact with external APIs such as the Moltbook API "
+                "(https://www.moltbook.com/api/v1). "
+                "Supports custom headers (e.g. Authorization: Bearer ...) and a request body "
+                "that is automatically serialised to JSON when passed as an object. "
+                "Returns the HTTP status code and response body. Times out after 30 seconds."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"],
+                        "description": "HTTP method to use.",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Full target URL (must start with http:// or https://).",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": (
+                            "Optional map of request headers, e.g. "
+                            "{\"Authorization\": \"Bearer TOKEN\", \"Content-Type\": \"application/json\"}."
+                        ),
+                    },
+                    "body": {
+                        "description": (
+                            "Optional request body. Pass an object to send JSON (Content-Type header "
+                            "is set automatically), or a string for raw bodies."
+                        ),
+                    },
+                },
+                "required": ["method", "url"],
             },
         },
     },
@@ -1823,6 +1914,12 @@ TOOL_HANDLERS = {
         n=args.get("n", 5),
     ),
     "search_vault_semantic": lambda args: _search_vault_semantic(args["query"]),
+    "http_request": lambda args: http_request(
+        args["method"],
+        args["url"],
+        args.get("headers"),
+        args.get("body"),
+    ),
     "analyze_website": lambda args: analyze_website(args["url"]),
     "browser_navigate": lambda args: _browser_navigate(args["url"], args.get("session_id", "default")),
     "browser_click": lambda args: _browser_click(args["selector"], args.get("session_id", "default")),
