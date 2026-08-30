@@ -223,7 +223,16 @@ class BackgroundAgent:
                 fn_args = {}
 
             handler = TOOL_HANDLERS.get(fn_name)
-            result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
+            if handler is None:
+                result = f"Error: unknown tool '{fn_name}'"
+            else:
+                try:
+                    result = handler(fn_args)
+                except KeyError as exc:
+                    result = f"Error: missing required argument {exc} for tool '{fn_name}'"
+                except Exception as exc:
+                    logger.exception("Tool '%s' raised an unexpected error", fn_name)
+                    result = f"Error: tool '{fn_name}' failed: {exc}"
 
             log_entries.append(
                 f"**Tool:** `{fn_name}`  \n"
