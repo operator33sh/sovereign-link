@@ -162,6 +162,67 @@ sovereign-link/
 └── sovereign-link.service  # systemd unit
 ```
 
+## Technical Architecture: The Sovereign Memory System
+
+Sovereign-Link is not a chatbot. It is a **Sovereign Memory Engine** — a persistent, self-maintaining intelligence layer that grows with the user over time. The system is composed of four interconnected layers.
+
+```mermaid
+flowchart LR
+    TG["📱 Telegram\n(Command & Control)"]
+    LLM["🧠 AI Model\n(LLM)"]
+    SME["⚙️ Sovereign Memory Engine\n(Background Agents)"]
+    VDB["🗄️ Vector DB + Git\n(ChromaDB / GitHub)"]
+    OV["📂 Obsidian Vault\n(Markdown / Human Interface)"]
+
+    TG -->|user input| LLM
+    LLM <-->|RAG · tool calls| SME
+    SME <-->|index · commit · retrieve| VDB
+    VDB <-->|read · write · sync| OV
+    LLM -->|response| TG
+```
+
+### Layer 1 — Interface
+
+| Component | Role |
+|-----------|------|
+| **Telegram** | Primary command-and-control surface. All real-time interaction, voice, images, and commands flow through this interface. |
+| **LLM (AI Model)** | Central processing unit. Handles reasoning, planning, tool orchestration, and natural language understanding across all domains. |
+
+### Layer 2 — Memory & Persistence
+
+| Component | Role |
+|-----------|------|
+| **Obsidian Vault** | The human-readable interface to long-term memory. All structured knowledge lives here as navigable, linkable notes. |
+| **Markdown** | The universal, future-proof data format. Plain text with `[[wikilinks]]` ensures portability across any tool or era. |
+| **Git / GitHub** | The backbone for version control, multi-device synchronization, and disaster recovery. Every vault write is committed and pushed automatically. |
+
+### Layer 3 — Intelligence & Retrieval (The Core)
+
+| Component | Role |
+|-----------|------|
+| **RAG (Retrieval-Augmented Generation)** | Grounds the AI in the Vault's truth rather than generic training data. Relevant fragments are retrieved and injected into context before every response. |
+| **Vector Database (ChromaDB)** | Enables semantic search. Information is retrieved by meaning and context — not just filename or keyword match. Powered by `nomic-embed-text` embeddings running locally. |
+| **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights (HVIs), synthesize structured `SovereignLog` files, build associative `[[wikilinks]]` to prior memory, and commit everything to git — automatically and continuously. |
+| **Active Context Layer (ACL)** | A high-priority briefing file (`.system/active_briefing.md`) that dynamically steers AI behavior based on the user's current operational state, priorities, and active focus areas. Loaded at session start to orient every interaction. |
+
+### Layer 4 — Framework
+
+| Component | Role |
+|-----------|------|
+| **The Harness (Het Harnas)** | A systemic set of psychological guardrails and operational constraints embedded in the system prompt. Defines the AI's behavioral contract, boundaries, and tone. |
+| **Fractalism** | The philosophical framework governing how data is organized and interconnected. Notes relate to other notes in self-similar, recursive patterns — mirroring how understanding actually develops. |
+
+### Data Flow
+
+1. A message arrives via **Telegram** and is passed to the **LLM**.
+2. The LLM issues tool calls to the **Sovereign Memory Engine**, which queries the **Vector DB** for semantically relevant vault fragments.
+3. Retrieved context is injected into the LLM's reasoning window alongside the **ACL briefing**.
+4. The LLM formulates a response and may invoke write tools — creating or updating **Markdown** notes in the **Obsidian Vault**.
+5. All writes are committed via **Git** and pushed to **GitHub** for synchronization and backup.
+6. Every 20 messages (and on `/clear` or shutdown), the Sovereign Memory Engine extracts HVIs, writes a `SovereignLog`, and pushes it — ensuring no insight is ever lost.
+
+---
+
 ## License
 
 MIT
