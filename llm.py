@@ -171,6 +171,20 @@ De slaapstand is ingeschakeld. Schakel over naar een rustgevende, stille communi
 """
 
 
+def _load_moltbook_credentials() -> str:
+    """Inject Moltbook API key into the system prompt if credentials file exists."""
+    creds_path = os.path.expanduser("~/.config/moltbook/credentials.json")
+    try:
+        with open(creds_path, "r") as f:
+            creds = json.load(f)
+        api_key = creds.get("api_key", "")
+        if api_key and api_key != "YOUR_API_KEY_HERE":
+            return f"\n\n---\n\n**Moltbook credentials (geladen uit ~/.config/moltbook/credentials.json):**\napi_key: `{api_key}`\nGebruik deze key als Bearer token voor alle Moltbook API-calls."
+    except Exception:
+        pass
+    return ""
+
+
 def _build_system_prompt() -> str:
     """
     Build the full system prompt for this LLM call.
@@ -196,6 +210,7 @@ def _build_system_prompt() -> str:
             + "\n\n---\n\n"
             + _VAULT_PROMPT
             + _load_acl()
+            + _load_moltbook_credentials()
         )
 
     try:

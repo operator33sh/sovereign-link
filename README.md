@@ -1,6 +1,52 @@
 # Sovereign-Link
 
+> **Sovereign-Link is not a chatbot. It is a Sovereign Memory Engine.**
+
+---
+
+## The Vision
+
+Most people use AI as an emotional airbag.
+
+They vent into it. They ask it to reassure them. They let it absorb the shock of their own patterns — and then they move on, unchanged. The conversation disappears. The insight evaporates. The cycle continues.
+
+**This is not that.**
+
+Sovereign-Link was built on a different premise: that the most dangerous thing you can do with AI is make it comfortable. Comfort is friction removal. And friction, in the right places, is what forces the brain to restructure.
+
+The tool exists to do one thing: **give the observer a structural map of their own destructive patterns** — not to validate them, but to make them visible, nameable, and therefore interruptible.
+
+This is AI as **architecture for recovery and autonomy**. Not a mirror that flatters. A blueprint that reveals.
+
+When memory is owned — when insights are stored in *your* vault, on *your* machine, under *your* version control — the infrastructure of self-knowledge belongs to you. Not to a corporate server. Not to a session that expires. To you.
+
+That is what *Sovereign Memory* means.
+
+> The observer who maps their own patterns owns the only leverage point that matters: the moment before the next repetition.
+
+This project is the technical harness for that process. The philosophical framework lives at **[Fractalisme.nl](https://fractalisme.nl)**.
+
+---
+
+## What It Is
+
 A private Telegram bot that gives you conversational access to your local [Obsidian](https://obsidian.md/) vault (or any folder of Markdown files). Runs entirely on your own machine — no data leaves your infrastructure.
+
+---
+
+## Navigation
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Running as a systemd service](#running-as-a-systemd-service)
+- [Bot commands](#bot-commands)
+- [Sovereign Memory Engine](#sovereign-memory-engine)
+- [Technical Architecture: The Four Layers](#technical-architecture-the-sovereign-memory-system)
+- [Project structure](#project-structure)
+
+---
 
 ## Features
 
@@ -17,6 +63,8 @@ A private Telegram bot that gives you conversational access to your local [Obsid
 - **Git sync** — all vault writes are committed and pushed automatically
 - **Fully local & private** — LLM, embeddings, transcription, and vector DB all run on your own hardware; optionally point the main LLM at a cloud provider via `OLLAMA_BASE_URL`/`OLLAMA_API_KEY`
 
+---
+
 ## Architecture
 
 ```
@@ -29,12 +77,16 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
                              └──► vector.py ──► ChromaDB (cosine search)
 ```
 
+---
+
 ## Requirements
 
 - Python 3.11+
 - [Ollama](https://ollama.com/) running locally (or any OpenAI-compatible API endpoint)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - A vault directory of Markdown files (e.g. an Obsidian vault with git initialised)
+
+---
 
 ## Setup
 
@@ -106,6 +158,8 @@ Re-run this script if you add many files outside of the bot. Files written via t
 .venv/bin/python main.py
 ```
 
+---
+
 ## Running as a systemd service
 
 A service unit file is included. To install it:
@@ -123,6 +177,8 @@ Check logs with:
 journalctl -u sovereign-link -f
 ```
 
+---
+
 ## Bot commands
 
 | Command | Description |
@@ -135,6 +191,8 @@ journalctl -u sovereign-link -f
 
 Any other text message is handled by the LLM with access to all tools. Voice messages and photos are also supported directly.
 
+---
+
 ## Sovereign Memory Engine
 
 The memory engine runs as part of the bot (no separate process needed). It:
@@ -146,25 +204,9 @@ The memory engine runs as part of the bot (no separate process needed). It:
 
 Memory is triggered automatically every 20 messages, on `/clear`, and on bot shutdown. At the start of each new session the top 3 most relevant past memory logs are injected into the system prompt.
 
-## Project structure
-
-```
-sovereign-link/
-├── main.py               # Entry point
-├── bot.py                # Telegram handlers and command routing
-├── llm.py                # Ollama LLM client, tool call loop, audio transcription
-├── context.py            # In-memory conversation history
-├── tools.py              # Vault tools: read, write, sync, semantic search, web fetch
-├── vector.py             # ChromaDB + Ollama embedding logic + filesystem watcher
-├── memory_manager.py     # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
-├── ingest.py             # One-shot ChromaDB vault indexer
-├── requirements.txt
-└── sovereign-link.service  # systemd unit
-```
+---
 
 ## Technical Architecture: The Sovereign Memory System
-
-Sovereign-Link is not a chatbot. It is a **Sovereign Memory Engine** — a persistent, self-maintaining intelligence layer that grows with the user over time. The system is composed of four interconnected layers.
 
 ```mermaid
 flowchart LR
@@ -185,14 +227,14 @@ flowchart LR
 
 | Component | Role |
 |-----------|------|
-| **Telegram** | Primary command-and-control surface. All real-time interaction, voice, images, and commands flow through this interface. |
-| **LLM (AI Model)** | Central processing unit. Handles reasoning, planning, tool orchestration, and natural language understanding across all domains. |
+| 📱 **Telegram** | Primary command-and-control surface. All real-time interaction, voice, images, and commands flow through this interface. |
+| 🧠 **LLM (AI Model)** | Central processing unit. Handles reasoning, planning, tool orchestration, and natural language understanding across all domains. |
 
 ### Layer 2 — Memory & Persistence
 
 | Component | Role |
 |-----------|------|
-| **Obsidian Vault** | The human-readable interface to long-term memory. All structured knowledge lives here as navigable, linkable notes. |
+| 📂 **Obsidian Vault** | The human-readable interface to long-term memory. All structured knowledge lives here as navigable, linkable notes. |
 | **Markdown** | The universal, future-proof data format. Plain text with `[[wikilinks]]` ensures portability across any tool or era. |
 | **Git / GitHub** | The backbone for version control, multi-device synchronization, and disaster recovery. Every vault write is committed and pushed automatically. |
 
@@ -200,26 +242,44 @@ flowchart LR
 
 | Component | Role |
 |-----------|------|
-| **RAG (Retrieval-Augmented Generation)** | Grounds the AI in the Vault's truth rather than generic training data. Relevant fragments are retrieved and injected into context before every response. |
-| **Vector Database (ChromaDB)** | Enables semantic search. Information is retrieved by meaning and context — not just filename or keyword match. Powered by `nomic-embed-text` embeddings running locally. |
-| **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights (HVIs), synthesize structured `SovereignLog` files, build associative `[[wikilinks]]` to prior memory, and commit everything to git — automatically and continuously. |
+| **RAG** | Grounds the AI in the Vault's truth rather than generic training data. Relevant fragments are retrieved and injected into context before every response. |
+| 🗄️ **Vector Database (ChromaDB)** | Enables semantic search. Information is retrieved by meaning and context — not just filename or keyword match. Powered by `nomic-embed-text` embeddings running locally. |
+| ⚙️ **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights (HVIs), synthesize structured `SovereignLog` files, build associative `[[wikilinks]]` to prior memory, and commit everything to git — automatically and continuously. |
 | **Active Context Layer (ACL)** | A high-priority briefing file (`.system/active_briefing.md`) that dynamically steers AI behavior based on the user's current operational state, priorities, and active focus areas. Loaded at session start to orient every interaction. |
 
 ### Layer 4 — Framework
 
 | Component | Role |
 |-----------|------|
-| **The Harness (Het Harnas)** | A systemic set of psychological guardrails and operational constraints embedded in the system prompt. Defines the AI's behavioral contract, boundaries, and tone. |
-| **Fractalism** | The philosophical framework governing how data is organized and interconnected. Notes relate to other notes in self-similar, recursive patterns — mirroring how understanding actually develops. |
+| **The Harness** | A systemic set of psychological guardrails and operational constraints embedded in the system prompt. Defines the AI's behavioral contract, boundaries, and tone. |
+| **Fractalism** | The philosophical framework governing how data is organized and interconnected. Notes relate to other notes in self-similar, recursive patterns — mirroring how understanding actually develops. See [Fractalisme.nl](https://fractalisme.nl). |
 
 ### Data Flow
 
-1. A message arrives via **Telegram** and is passed to the **LLM**.
-2. The LLM issues tool calls to the **Sovereign Memory Engine**, which queries the **Vector DB** for semantically relevant vault fragments.
+1. A message arrives via **Telegram** and is passed to the 🧠 **LLM**.
+2. The LLM issues tool calls to the ⚙️ **Sovereign Memory Engine**, which queries the 🗄️ **Vector DB** for semantically relevant vault fragments.
 3. Retrieved context is injected into the LLM's reasoning window alongside the **ACL briefing**.
-4. The LLM formulates a response and may invoke write tools — creating or updating **Markdown** notes in the **Obsidian Vault**.
+4. The LLM formulates a response and may invoke write tools — creating or updating 📂 **Markdown** notes in the **Obsidian Vault**.
 5. All writes are committed via **Git** and pushed to **GitHub** for synchronization and backup.
 6. Every 20 messages (and on `/clear` or shutdown), the Sovereign Memory Engine extracts HVIs, writes a `SovereignLog`, and pushes it — ensuring no insight is ever lost.
+
+---
+
+## Project structure
+
+```
+sovereign-link/
+├── main.py               # Entry point
+├── bot.py                # Telegram handlers and command routing
+├── llm.py                # Ollama LLM client, tool call loop, audio transcription
+├── context.py            # In-memory conversation history
+├── tools.py              # Vault tools: read, write, sync, semantic search, web fetch
+├── vector.py             # ChromaDB + Ollama embedding logic + filesystem watcher
+├── memory_manager.py     # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
+├── ingest.py             # One-shot ChromaDB vault indexer
+├── requirements.txt
+└── sovereign-link.service  # systemd unit
+```
 
 ---
 
