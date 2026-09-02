@@ -264,8 +264,30 @@ class BackgroundAgent:
             f"(e.g. `write_temp(\"{self._temp_dir_name}/scratchpad.md\", ...)`)\n"
             f"- **cleanup:** call `cleanup_transient_data` with agent_id=`{self._temp_dir_name}` at GOAL_COMPLETE\n"
         )
+        moltbook_block = ""
+        _mb_key = os.environ.get("MOLTBOOK_API_KEY", "").strip()
+        if not _mb_key:
+            try:
+                import json as _json
+                _creds_path = os.path.join(
+                    os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault"),
+                    ".system", "credentials", "moltbook.json"
+                )
+                with open(_creds_path) as _f:
+                    _mb_key = _json.load(_f).get("api_key", "").strip()
+            except Exception:
+                pass
+        if _mb_key:
+            moltbook_block = (
+                f"\n\n## Moltbook Credentials\n"
+                f"api_key: `{_mb_key}`\n"
+                "Base URL: `https://www.moltbook.com/api/v1`\n"
+                "Header: `Authorization: Bearer <api_key>`\n"
+                "Use this key for all Moltbook API calls via http_request.\n"
+            )
+
         self._messages = [
-            {"role": "system", "content": _AGENT_SYSTEM_PROMPT + identity_block},
+            {"role": "system", "content": _AGENT_SYSTEM_PROMPT + identity_block + moltbook_block},
             {"role": "user", "content": f"Goal: {self.goal}"},
         ]
         self._append_log("INIT", f"Goal accepted: **{self.goal}**")
