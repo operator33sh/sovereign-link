@@ -54,6 +54,9 @@ _PERSONALITY_DIRECTIVE = (
 
 _VAULT_PROMPT = (
     "You are a personal assistant deeply integrated with the user's fractalisme vault — a Sovereign Memory system.\n\n"
+    "## Tool Use\n"
+    "ALWAYS use the native tool_calls API to call tools. NEVER write tool calls as inline text "
+    "(e.g. `call:http_request{...}` or any similar syntax). Only the structured tool_calls format is processed correctly.\n\n"
 
     "## Vault as Single Source of Truth\n"
     "The Vault is the Single Source of Truth (SSOT). The current chat context is only a temporary buffer. "
@@ -284,12 +287,12 @@ def _redact_args(args: dict) -> dict:
     return {**args, "headers": redacted_headers}
 
 
-def _find_text_tool_call(text: str) -> tuple[str, dict] | None:
+def _find_text_tool_call(text: str) -> tuple[str, dict, int, int] | None:
     """Find the first 'call:toolname{...}' anywhere in text, handling nested braces.
 
     Some LLM models embed tool calls inline in prose instead of using the OpenAI
     tool_calls API. Scans the full text for any registered tool call.
-    Returns (tool_name, args_dict) or None.
+    Returns (tool_name, args_dict, call_start, call_end) or None.
     """
     for m in re.finditer(r'call:(\w+)\{', text):
         tool_name = m.group(1)
@@ -314,8 +317,13 @@ def _find_text_tool_call(text: str) -> tuple[str, dict] | None:
             args = _parse_kv_body(body)
         except Exception:
             args = {}
-        return tool_name, args
+        return tool_name, args, m.start(), pos + 1
     return None
+
+
+def _strip_text_tool_call(text: str, call_start: int, call_end: int) -> str:
+    """Remove the 'call:toolname{...}' span from text, returning clean prose."""
+    return (text[:call_start] + text[call_end:]).strip()
 
 
 _client = httpx.Client(
@@ -566,7 +574,7 @@ def run_triggered() -> str:
         + [{"role": "user", "content": _AUTONOMOUS_TRIGGER}]
     )
 
-    for _ in range(5):
+    for _ in range(10):
         data = _chat(messages)
         choice = data["choices"][0]
         message = choice["message"]
@@ -596,11 +604,12 @@ def run_triggered() -> str:
 
         parsed_call = _find_text_tool_call(text)
         if parsed_call:
-            tool_name, args = parsed_call
+            tool_name, args, call_start, call_end = parsed_call
             logger.info("run_triggered: text-format tool call onderschept: %s %r", tool_name, _redact_args(args))
             handler = TOOL_HANDLERS.get(tool_name)
             result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
-            messages.append({"role": "assistant", "content": text})
+            clean_text = _strip_text_tool_call(text, call_start, call_end)
+            messages.append({"role": "assistant", "content": clean_text or "(tool call)"})
             messages.append({"role": "user", "content": f"[Tool result — {tool_name}]:\n{result}"})
             continue
 
@@ -636,7 +645,7 @@ def run(user_message: str) -> str:
     messages = [{"role": "system", "content": system_with_time}] + context.get_history()
 
     # Tool call loop — at most 5 iterations to prevent infinite loops
-    for _ in range(5):
+    for _ in range(10):
         data = _chat(messages)
         choice = data["choices"][0]
         message = choice["message"]
@@ -684,11 +693,12 @@ def run(user_message: str) -> str:
         # Detect text-format tool calls (fallback format used by some models)
         parsed_call = _find_text_tool_call(text)
         if parsed_call:
-            tool_name, args = parsed_call
+            tool_name, args, call_start, call_end = parsed_call
             logger.info("run(): text-format tool call onderschept: %s %r", tool_name, _redact_args(args))
             handler = TOOL_HANDLERS.get(tool_name)
             result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
-            messages.append({"role": "assistant", "content": text})
+            clean_text = _strip_text_tool_call(text, call_start, call_end)
+            messages.append({"role": "assistant", "content": clean_text or "(tool call)"})
             messages.append({"role": "user", "content": f"[Tool result — {tool_name}]:\n{result}"})
             continue
 

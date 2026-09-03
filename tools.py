@@ -272,6 +272,18 @@ def sync_vault() -> str:
         return f"Error during sync: {e}"
 
 
+def _moltbook_debug_log(entry: str) -> None:
+    """Append a raw trace entry to .agent_temp/moltbook_debug.log."""
+    try:
+        os.makedirs(AGENT_TEMP_PATH, exist_ok=True)
+        log_path = os.path.join(AGENT_TEMP_PATH, "moltbook_debug.log")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"\n[{ts}]\n{entry}\n{'─'*60}\n")
+    except Exception:
+        pass
+
+
 def http_request(
     method: str,
     url: str,
@@ -290,6 +302,8 @@ def http_request(
     if method not in ("GET", "POST", "PUT", "DELETE", "PATCH"):
         return f"Error: unsupported HTTP method '{method}'"
 
+    is_moltbook = "moltbook.com" in (parsed.netloc or "")
+
     # Serialize body
     data: bytes | None = None
     if body is not None:
@@ -305,19 +319,49 @@ def http_request(
     for k, v in (headers or {}).items():
         req.add_header(k, v)
 
+    if is_moltbook:
+        safe_headers = {
+            k: (v[:10] + "…[REDACTED]" if k.lower() in ("authorization", "x-api-key", "cookie") else v)
+            for k, v in (headers or {}).items()
+        }
+        body_preview = (data.decode("utf-8", errors="replace") if data else "(none)")[:500]
+        _moltbook_debug_log(
+            f"REQUEST: {method} {url}\n"
+            f"HEADERS: {json.dumps(safe_headers, ensure_ascii=False)}\n"
+            f"BODY:    {body_preview}"
+        )
+
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             status = resp.status
             response_body = resp.read().decode("utf-8", errors="replace")
+            if is_moltbook:
+                _moltbook_debug_log(
+                    f"RESPONSE: {method} {url}\n"
+                    f"STATUS:   {status}\n"
+                    f"BODY:     {response_body[:2000]}"
+                )
             return f"Status: {status}\n\n{response_body[:8000]}"
     except urllib.error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")[:2000]
+        if is_moltbook:
+            _moltbook_debug_log(
+                f"HTTP ERROR: {method} {url}\n"
+                f"STATUS:     {e.code} {e.reason}\n"
+                f"BODY:       {body_text}"
+            )
         return f"HTTP Error {e.code}: {e.reason}\n\n{body_text}"
     except urllib.error.URLError as e:
+        if is_moltbook:
+            _moltbook_debug_log(f"URL ERROR: {method} {url}\nREASON: {e.reason}")
         return f"Error: request failed — {e.reason}"
     except TimeoutError:
+        if is_moltbook:
+            _moltbook_debug_log(f"TIMEOUT: {method} {url}")
         return "Error: request timed out after 30 seconds"
     except Exception as e:
+        if is_moltbook:
+            _moltbook_debug_log(f"EXCEPTION: {method} {url}\n{e}")
         return f"Error: {e}"
 
 
