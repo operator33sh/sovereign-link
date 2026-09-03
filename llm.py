@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime
 
 import httpx
@@ -233,6 +234,63 @@ def _build_system_prompt() -> str:
     except Exception:
         pass
     return base
+
+def _parse_kv_body(body: str) -> dict:
+    """Parse unquoted 'key:value,key:{nested:value}' format emitted by some models."""
+    result = {}
+    depth = 0
+    current_key: str | None = None
+    current_val: list[str] = []
+
+    for c in body:
+        if c == '{':
+            depth += 1
+            current_val.append(c)
+        elif c == '}':
+            depth -= 1
+            current_val.append(c)
+        elif c == ':' and depth == 0 and current_key is None:
+            current_key = ''.join(current_val).strip()
+            current_val = []
+        elif c == ',' and depth == 0:
+            val = ''.join(current_val).strip()
+            if current_key is not None:
+                result[current_key] = _coerce_kv_value(val)
+            current_key = None
+            current_val = []
+        else:
+            current_val.append(c)
+
+    if current_key is not None:
+        result[current_key] = _coerce_kv_value(''.join(current_val).strip())
+
+    return result
+
+
+def _coerce_kv_value(val: str):
+    if val.startswith('{') and val.endswith('}'):
+        return _parse_kv_body(val[1:-1])
+    return val
+
+
+def _try_parse_text_tool_call(text: str) -> tuple[str, dict] | None:
+    """Detect text-format tool calls like 'call:toolname{key:val,nested:{k:v}}'.
+
+    Some LLM models fall back to this text format instead of the OpenAI tool_calls API.
+    Returns (tool_name, args_dict) if the tool is registered, else None.
+    """
+    m = re.match(r'^call:(\w+)\{(.*)\}$', text.strip(), re.DOTALL)
+    if not m:
+        return None
+    tool_name = m.group(1)
+    if tool_name not in TOOL_HANDLERS:
+        return None
+    try:
+        args = _parse_kv_body(m.group(2))
+    except Exception:
+        args = {}
+    return tool_name, args
+
 
 _client = httpx.Client(
     base_url=OLLAMA_BASE_URL,
@@ -509,6 +567,17 @@ def run_triggered() -> str:
         if not text:
             logger.warning("run_triggered: LLM produceerde geen tekst (lege content na tool loop)")
             return ""
+
+        parsed_call = _try_parse_text_tool_call(text)
+        if parsed_call:
+            tool_name, args = parsed_call
+            logger.info("run_triggered: text-format tool call onderschept: %s %r", tool_name, args)
+            handler = TOOL_HANDLERS.get(tool_name)
+            result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
+            messages.append({"role": "assistant", "content": text})
+            messages.append({"role": "user", "content": f"[Tool result — {tool_name}]:\n{result}"})
+            continue
+
         context.add_message("assistant", text)
         return text
 
@@ -583,6 +652,20 @@ def run(user_message: str) -> str:
         text = message.get("content") or ""
         if not text:
             logger.warning("run(): LLM produceerde lege content (finish_reason=%r)", finish_reason)
+            context.add_message("assistant", text)
+            return text
+
+        # Detect text-format tool calls (fallback format used by some models)
+        parsed_call = _try_parse_text_tool_call(text)
+        if parsed_call:
+            tool_name, args = parsed_call
+            logger.info("run(): text-format tool call onderschept: %s %r", tool_name, args)
+            handler = TOOL_HANDLERS.get(tool_name)
+            result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
+            messages.append({"role": "assistant", "content": text})
+            messages.append({"role": "user", "content": f"[Tool result — {tool_name}]:\n{result}"})
+            continue
+
         context.add_message("assistant", text)
         return text
 
