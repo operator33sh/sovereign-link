@@ -85,7 +85,7 @@ def _delete_session_draft() -> None:
 
 def _strip_timestamps(text: str) -> str:
     result = re.sub(r"\n\[[^\]]{10,}\]", "", text).strip()
-    return result or "…"
+    return result
 
 
 def _is_authorized(update: Update) -> bool:
@@ -396,6 +396,9 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         stripped = _strip_timestamps(reply)
         if stripped:
             await update.message.reply_text(stripped)
+        else:
+            logger.warning("LLM run(): leeg antwoord voor audiobericht")
+            await update.message.reply_text("(Geen antwoord ontvangen van het model. Probeer het opnieuw.)")
         _save_session_draft()
         session_logger.on_turn(context.get_history())
 
@@ -531,6 +534,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(stripped)
     else:
         logger.warning("LLM run(): leeg antwoord voor bericht: %r", user_text[:100])
+        await update.message.reply_text("(Geen antwoord ontvangen van het model. Probeer het opnieuw.)")
     _save_session_draft()
     session_logger.on_turn(context.get_history())
 
