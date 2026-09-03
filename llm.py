@@ -273,6 +273,17 @@ def _coerce_kv_value(val: str):
     return val
 
 
+def _redact_args(args: dict) -> dict:
+    """Return a copy of args with sensitive header values masked for logging."""
+    if "headers" not in args or not isinstance(args["headers"], dict):
+        return args
+    redacted_headers = {
+        k: (v[:10] + "…[REDACTED]" if k.lower() in ("authorization", "x-api-key", "cookie") else v)
+        for k, v in args["headers"].items()
+    }
+    return {**args, "headers": redacted_headers}
+
+
 def _find_text_tool_call(text: str) -> tuple[str, dict] | None:
     """Find the first 'call:toolname{...}' anywhere in text, handling nested braces.
 
@@ -586,7 +597,7 @@ def run_triggered() -> str:
         parsed_call = _find_text_tool_call(text)
         if parsed_call:
             tool_name, args = parsed_call
-            logger.info("run_triggered: text-format tool call onderschept: %s %r", tool_name, args)
+            logger.info("run_triggered: text-format tool call onderschept: %s %r", tool_name, _redact_args(args))
             handler = TOOL_HANDLERS.get(tool_name)
             result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
             messages.append({"role": "assistant", "content": text})
@@ -674,7 +685,7 @@ def run(user_message: str) -> str:
         parsed_call = _find_text_tool_call(text)
         if parsed_call:
             tool_name, args = parsed_call
-            logger.info("run(): text-format tool call onderschept: %s %r", tool_name, args)
+            logger.info("run(): text-format tool call onderschept: %s %r", tool_name, _redact_args(args))
             handler = TOOL_HANDLERS.get(tool_name)
             result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
             messages.append({"role": "assistant", "content": text})
