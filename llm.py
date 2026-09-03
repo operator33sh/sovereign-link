@@ -507,10 +507,12 @@ def run_triggered() -> str:
 
         text = (message.get("content") or "").strip()
         if not text:
+            logger.warning("run_triggered: LLM produceerde geen tekst (lege content na tool loop)")
             return ""
         context.add_message("assistant", text)
         return text
 
+    logger.warning("run_triggered: tool call loop overschreed maximum iteraties zonder tekstreactie")
     return ""
 
 
@@ -579,6 +581,8 @@ def run(user_message: str) -> str:
 
         # Final text response
         text = message.get("content") or ""
+        if not text:
+            logger.warning("run(): LLM produceerde lege content (finish_reason=%r)", finish_reason)
         context.add_message("assistant", text)
         return text
 

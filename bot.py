@@ -38,6 +38,8 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "90"))  # seconds before llm.run() is considered hung
+
 AUTO_MEMORY_EVERY = 10  # trigger memory pipeline every N user messages
 _message_count = 0
 _messages_since_last_memory = 0
@@ -373,22 +375,27 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         _loop = asyncio.get_event_loop()
-        chat_bridge.set_sender(
-            lambda text: asyncio.run_coroutine_threadsafe(
-                update.message.reply_text(text[:4096]), _loop
-            )
-        )
+        chat_bridge.set_sender(_make_sender(update, _loop))
         chat_bridge.set_context_injector(_sleep_aware_context_injector)
         chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
-        reply = await asyncio.to_thread(llm.run, transcription)
+        try:
+            reply = await asyncio.wait_for(
+                asyncio.to_thread(llm.run, transcription),
+                timeout=LLM_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error("LLM run() timed out na %.0fs voor audiobericht", LLM_TIMEOUT)
+            reply = "Het antwoord duurde te lang. Probeer het opnieuw."
 
         typing_task.cancel()
         await update.message.reply_text(
             f"<i>{html.escape(transcription)}</i>",
             parse_mode="HTML",
         )
-        await update.message.reply_text(_strip_timestamps(reply))
+        stripped = _strip_timestamps(reply)
+        if stripped:
+            await update.message.reply_text(stripped)
         _save_session_draft()
         session_logger.on_turn(context.get_history())
 
@@ -412,6 +419,26 @@ def _sleep_aware_context_injector(text: str) -> None:
             logger.exception("Sleep-mode: failed to queue agent notification")
     else:
         context.add_message("user", text)
+
+
+def _make_sender(update: "Update", loop: "asyncio.AbstractEventLoop") -> "Callable[[str], None]":
+    """
+    Create a thread-safe Telegram sender with empty-text guard and delivery error logging.
+    Captures update + loop at call time so agent threads can send without holding a reference.
+    """
+    def _sender(text: str) -> None:
+        if not text or not text.strip():
+            logger.warning("Sender: leeg bericht onderschept, niet verstuurd naar Telegram")
+            return
+        fut = asyncio.run_coroutine_threadsafe(
+            update.message.reply_text(text[:4096]), loop
+        )
+        def _check(f: "asyncio.Future") -> None:
+            exc = f.exception()
+            if exc:
+                logger.error("Sender: Telegram bezorging mislukt: %s", exc)
+        fut.add_done_callback(_check)
+    return _sender
 
 
 def _make_llm_trigger_fn() -> "Callable[[], None]":
@@ -480,24 +507,30 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
     # Register sender + context injector so agents can report back to chat and Luna's context
     _loop = asyncio.get_event_loop()
-    chat_bridge.set_sender(
-        lambda text: asyncio.run_coroutine_threadsafe(
-            update.message.reply_text(text[:4096]), _loop
-        )
-    )
+    chat_bridge.set_sender(_make_sender(update, _loop))
     chat_bridge.set_context_injector(_sleep_aware_context_injector)
     chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
     typing_task = asyncio.create_task(keep_typing())
     try:
-        reply = await asyncio.to_thread(llm.run, user_text)
+        reply = await asyncio.wait_for(
+            asyncio.to_thread(llm.run, user_text),
+            timeout=LLM_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.error("LLM run() timed out na %.0fs voor bericht: %r", LLM_TIMEOUT, user_text[:100])
+        reply = "Het antwoord duurde te lang. Probeer het opnieuw."
     except Exception as e:
         logger.exception("LLM error")
         reply = f"Error: {e}"
     finally:
         typing_task.cancel()
 
-    await update.message.reply_text(_strip_timestamps(reply))
+    stripped = _strip_timestamps(reply)
+    if stripped:
+        await update.message.reply_text(stripped)
+    else:
+        logger.warning("LLM run(): leeg antwoord voor bericht: %r", user_text[:100])
     _save_session_draft()
     session_logger.on_turn(context.get_history())
 
@@ -537,11 +570,7 @@ async def cmd_agent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Register callbacks so Luna can synthesize and report when the agent completes
     _loop = asyncio.get_event_loop()
-    chat_bridge.set_sender(
-        lambda text: asyncio.run_coroutine_threadsafe(
-            update.message.reply_text(text[:4096]), _loop
-        )
-    )
+    chat_bridge.set_sender(_make_sender(update, _loop))
     chat_bridge.set_context_injector(_sleep_aware_context_injector)
     chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
@@ -647,7 +676,7 @@ async def _on_shutdown(app: Application) -> None:
 def build_app() -> Application:
     _scheduler.start()
     _automation_engine.start()
-    app = Application.builder().token(TELEGRAM_TOKEN).post_init(_set_commands).post_shutdown(_on_shutdown).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(True).post_init(_set_commands).post_shutdown(_on_shutdown).build()
 
     # Wire proactive dispatcher: send_fn uses app.bot.send_message so it can
     # push to the chat from background threads without an active update context.
