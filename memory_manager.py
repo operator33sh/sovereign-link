@@ -43,7 +43,9 @@ Each insight block uses this exact structure:
 ```
 - Timestamp: [ISO Date]
 - Narrative: [1-3 sentences: trigger, experience, reasoning — may reference [[previous logs]]]
+- Catalyst: [the specific environmental pressure, external challenge, contradiction, or internal tension that forced the shift — MANDATORY]
 - Core Insight: [one sentence: the conclusion or breakthrough]
+- Evolutionary Shift: [State A (before pressure) → State B (after pressure)]
 - Relation: [Evolution of [[X]] | Extension of [[X]] | Contradiction of [[X]] | —]
 - Emotional/Psychological State: [e.g. Vulnerable, Analytical, Transgressive, Integrative]
 - Related Tags: [#shadowwork #Sovereign #AI_Architecture]
@@ -106,7 +108,9 @@ def format_memory_note(
         lines.append(f"### Inzicht {i}\n")
         lines.append(f"- Datum: {insight.get('timestamp', today)} {time_tag}")
         lines.append(f"- Aanleiding: {insight.get('narrative', '')}")
+        lines.append(f"- Katalysator: {insight.get('catalyst', '—')}")
         lines.append(f"- Kernpunt: {insight.get('core_insight', '')}")
+        lines.append(f"- Evolutionaire Verschuiving: {insight.get('evolutionary_shift', '—')}")
         relation = insight.get("relation_type") or ""
         lines.append(f"- Relatie: {relation if relation else '—'}")
         lines.append(f"- Emotionele/psychologische staat: {insight.get('emotional_state', 'Onbekend')}")
@@ -182,7 +186,9 @@ def run_memory_pipeline(transcript: str) -> dict:
         insights = [{
             "timestamp": datetime.now().strftime("%Y-%m-%d"),
             "narrative": "No meaningful conversation content was found to extract a narrative from.",
+            "catalyst": "No extractable tension or pressure detected in the transcript.",
             "core_insight": "No insights extracted from this session.",
+            "evolutionary_shift": "—",
             "relation_type": None,
             "emotional_state": "Neutral",
             "tags": ["#sovereign"],

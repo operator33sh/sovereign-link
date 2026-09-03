@@ -334,15 +334,15 @@ def extract_memory_insights(transcript: str, prior_memory: str = "") -> dict:
 
     Returns a dict with keys:
         - topic: snake_case slug (2-4 words) for the filename
-        - insights: list of dicts with keys timestamp, core_insight, emotional_state,
-                    tags, connected_nodes, open_questions
+        - insights: list of dicts with keys timestamp, catalyst, core_insight,
+                    evolutionary_shift, emotional_state, tags, connected_nodes, open_questions
     """
     today = datetime.now(tz=_get_local_tz()).strftime("%Y-%m-%d")
     prompt = (
         "Analyseer het volgende gespreksverslag en extraheer Hoog-Waardige Inzichten (HVI's).\n"
         "HVI's zijn: psychologische doorbraken, herdefinieerde waarden, terugkerende schaduwpatronen, "
         "of technische/architecturale beslissingen met langetermijngevolgen.\n\n"
-        "BELANGRIJK: Schrijf alle inhoudsvelden (narrative, core_insight, emotional_state, open_questions) "
+        "BELANGRIJK: Schrijf alle inhoudsvelden (narrative, catalyst, core_insight, evolutionary_shift, emotional_state, open_questions) "
         "uitsluitend in het Nederlands.\n\n"
         "Geef JSON terug met precies twee velden:\n"
         '- "topic": een slug van 2-4 woorden met underscores, geen spaties (bijv. "Schaduw_Integratie_Cyclus")\n'
@@ -351,7 +351,12 @@ def extract_memory_insights(transcript: str, prior_memory: str = "") -> dict:
         '    - "narrative": 1-3 zinnen die de aanleiding en het redeneerproces beschrijven — '
         'beschrijf de ervaring, frustratie of vraag van de gebruiker die de thread startte, en hoe het zich ontvouwde. '
         'Schrijf vanuit het perspectief van de gebruiker. Vermeld de conclusie NIET hier.\n'
+        '    - "catalyst": de specifieke omgevingsdruk, externe uitdaging, tegenstrijdigheid of interne spanning '
+        'die de verschuiving afdwong — bijv. een challenge van een externe agent, een redeneerblunder, of een conflict '
+        'met een bestaande aanname. Dit veld is VERPLICHT en mag niet leeg zijn.\n'
         '    - "core_insight": één zin die de doorbraak of conclusie samenvat\n'
+        '    - "evolutionary_shift": beschrijf de delta als "Staat A (voor druk) → Staat B (na druk)" — '
+        'wat is er structureel veranderd in het denken of de architectuur?\n'
         '    - "emotional_state": bijv. Kwetsbaar, Analytisch, Transgressief, Integratief\n'
         '    - "tags": lijst van Obsidian hashtags bijv. ["#schaduwwerk", "#Sovereign"]\n'
         '    - "connected_nodes": lijst van [[bestandsnaam]] wikilinks naar de meest relevante vorige logs '
@@ -386,10 +391,14 @@ def extract_memory_insights(transcript: str, prior_memory: str = "") -> dict:
             "topic": "Unnamed_Insight",
             "insights": [{
                 "timestamp": today,
+                "narrative": "",
+                "catalyst": "JSON parse failure — raw LLM output could not be decoded.",
                 "core_insight": raw[:500] if raw else "No insight extracted.",
+                "evolutionary_shift": "—",
                 "emotional_state": "Unknown",
                 "tags": ["#sovereign"],
                 "connected_nodes": [],
+                "relation_type": None,
                 "open_questions": [],
             }],
         }
