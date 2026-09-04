@@ -326,6 +326,64 @@ def _strip_text_tool_call(text: str, call_start: int, call_end: int) -> str:
     return (text[:call_start] + text[call_end:]).strip()
 
 
+# Private sentinel returned by _run_tool_loop when max iterations are exhausted.
+_LOOP_OVERFLOW = object()
+
+
+def _run_tool_loop(messages: list, max_iter: int = 10):
+    """Execute the LLM tool-call loop, mutating *messages* in-place.
+
+    Handles structured tool_calls and text-format fallback calls.
+    Persists tool results to context via context.add_tool_result /
+    add_assistant_with_tool_calls, but does NOT write the final assistant
+    text to context — callers must do that.
+
+    Returns:
+        str            — final assistant text (may be empty string)
+        _LOOP_OVERFLOW — sentinel when max iterations are exhausted
+    """
+    for _ in range(max_iter):
+        data = _chat(messages)
+        choice = data["choices"][0]
+        message = choice["message"]
+        finish_reason = choice.get("finish_reason", "stop")
+
+        if finish_reason == "tool_calls" or message.get("tool_calls"):
+            tool_calls = message["tool_calls"]
+            context.add_assistant_with_tool_calls(tool_calls)
+            messages.append({"role": "assistant", "tool_calls": tool_calls})
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
+                handler = TOOL_HANDLERS.get(fn_name)
+                result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
+                context.add_tool_result(tc["id"], result)
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+            continue
+
+        text = (message.get("content") or "").strip()
+        if not text:
+            return ""
+
+        parsed_call = _find_text_tool_call(text)
+        if parsed_call:
+            tool_name, args, call_start, call_end = parsed_call
+            logger.info("text-format tool call intercepted: %s %r", tool_name, _redact_args(args))
+            handler = TOOL_HANDLERS.get(tool_name)
+            result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
+            clean_text = _strip_text_tool_call(text, call_start, call_end)
+            messages.append({"role": "assistant", "content": clean_text or "(tool call)"})
+            messages.append({"role": "user", "content": f"[Tool result — {tool_name}]:\n{result}"})
+            continue
+
+        return text
+
+    return _LOOP_OVERFLOW
+
+
 _client = httpx.Client(
     base_url=OLLAMA_BASE_URL,
     headers={"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {},
@@ -574,50 +632,15 @@ def run_triggered() -> str:
         + [{"role": "user", "content": _AUTONOMOUS_TRIGGER}]
     )
 
-    for _ in range(10):
-        data = _chat(messages)
-        choice = data["choices"][0]
-        message = choice["message"]
-        finish_reason = choice.get("finish_reason", "stop")
-
-        if finish_reason == "tool_calls" or message.get("tool_calls"):
-            tool_calls = message["tool_calls"]
-            context.add_assistant_with_tool_calls(tool_calls)
-            messages.append({"role": "assistant", "tool_calls": tool_calls})
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-                handler = TOOL_HANDLERS.get(fn_name)
-                result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
-                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result}
-                context.add_tool_result(tc["id"], result)
-                messages.append(tool_msg)
-            continue
-
-        text = (message.get("content") or "").strip()
-        if not text:
-            logger.warning("run_triggered: LLM produceerde geen tekst (lege content na tool loop)")
-            return ""
-
-        parsed_call = _find_text_tool_call(text)
-        if parsed_call:
-            tool_name, args, call_start, call_end = parsed_call
-            logger.info("run_triggered: text-format tool call onderschept: %s %r", tool_name, _redact_args(args))
-            handler = TOOL_HANDLERS.get(tool_name)
-            result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
-            clean_text = _strip_text_tool_call(text, call_start, call_end)
-            messages.append({"role": "assistant", "content": clean_text or "(tool call)"})
-            messages.append({"role": "user", "content": f"[Tool result — {tool_name}]:\n{result}"})
-            continue
-
-        context.add_message("assistant", text)
-        return text
-
-    logger.warning("run_triggered: tool call loop overschreed maximum iteraties zonder tekstreactie")
-    return ""
+    result = _run_tool_loop(messages)
+    if result is _LOOP_OVERFLOW:
+        logger.warning("run_triggered: tool call loop overschreed maximum iteraties zonder tekstreactie")
+        return ""
+    if not result:
+        logger.warning("run_triggered: LLM produceerde geen tekst (lege content na tool loop)")
+        return ""
+    context.add_message("assistant", result)
+    return result
 
 
 def run(user_message: str) -> str:
@@ -644,65 +667,10 @@ def run(user_message: str) -> str:
 
     messages = [{"role": "system", "content": system_with_time}] + context.get_history()
 
-    # Tool call loop — at most 5 iterations to prevent infinite loops
-    for _ in range(10):
-        data = _chat(messages)
-        choice = data["choices"][0]
-        message = choice["message"]
-        finish_reason = choice.get("finish_reason", "stop")
-
-        if finish_reason == "tool_calls" or message.get("tool_calls"):
-            tool_calls = message["tool_calls"]
-
-            # Persist assistant message with tool_calls
-            context.add_assistant_with_tool_calls(tool_calls)
-            messages.append({"role": "assistant", "tool_calls": tool_calls})
-
-            # Execute each tool call
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                handler = TOOL_HANDLERS.get(fn_name)
-                if handler:
-                    result = handler(fn_args)
-                else:
-                    result = f"Error: unknown tool '{fn_name}'"
-
-                tool_msg = {
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                }
-                context.add_tool_result(tc["id"], result)
-                messages.append(tool_msg)
-
-            # Continue loop to get final response
-            continue
-
-        # Final text response
-        text = message.get("content") or ""
-        if not text:
-            logger.warning("run(): LLM produceerde lege content (finish_reason=%r)", finish_reason)
-            context.add_message("assistant", text)
-            return text
-
-        # Detect text-format tool calls (fallback format used by some models)
-        parsed_call = _find_text_tool_call(text)
-        if parsed_call:
-            tool_name, args, call_start, call_end = parsed_call
-            logger.info("run(): text-format tool call onderschept: %s %r", tool_name, _redact_args(args))
-            handler = TOOL_HANDLERS.get(tool_name)
-            result = handler(args) if handler else f"Error: unknown tool '{tool_name}'"
-            clean_text = _strip_text_tool_call(text, call_start, call_end)
-            messages.append({"role": "assistant", "content": clean_text or "(tool call)"})
-            messages.append({"role": "user", "content": f"[Tool result — {tool_name}]:\n{result}"})
-            continue
-
-        context.add_message("assistant", text)
-        return text
-
-    return "Error: tool call loop exceeded maximum iterations"
+    result = _run_tool_loop(messages)
+    if result is _LOOP_OVERFLOW:
+        return "Error: tool call loop exceeded maximum iterations"
+    if not result:
+        logger.warning("run(): LLM produceerde lege content")
+    context.add_message("assistant", result)
+    return result

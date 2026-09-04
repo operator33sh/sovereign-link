@@ -251,10 +251,66 @@ class BackgroundAgent:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self) -> str:
-        """
-        Execute the agent loop.
+    def _run_loop(self) -> str:
+        """Execute the observe→reason→act→evaluate loop.
+
+        Assumes self._messages is already initialised with system prompt and goal.
         Returns a human-readable result string.
+        """
+        for iteration in range(1, self.max_iterations + 1):
+            self._append_log(
+                f"ITERATION {iteration} — OBSERVE / REASON",
+                "Calling LLM to determine next action…",
+            )
+
+            try:
+                data = self._llm_call()
+            except Exception as e:
+                self._append_log("ERROR", f"LLM call failed: {e}")
+                self._finalize("FAILED")
+                return f"Agent '{self.agent_name}' failed: {e}"
+
+            choice = data["choices"][0]
+            message = choice["message"]
+            finish_reason = choice.get("finish_reason", "stop")
+
+            if finish_reason == "tool_calls" or message.get("tool_calls"):
+                tool_calls = message["tool_calls"]
+                self._messages.append({"role": "assistant", "tool_calls": tool_calls})
+                log_entries = self._execute_tool_calls(tool_calls)
+                self._append_log(f"ITERATION {iteration} — ACT", "\n\n".join(log_entries))
+                continue
+
+            text = message.get("content") or ""
+            self._messages.append({"role": "assistant", "content": text})
+
+            if "GOAL_COMPLETE:" in text:
+                self._append_log("COMPLETE", text)
+                self._finalize("SUCCESS")
+                self._purge_temp()
+                sync_vault()
+                self._notify_chat(text)
+                return text
+
+            self._append_log(f"ITERATION {iteration} — EVALUATE", text)
+            self._messages.append({"role": "user", "content": _EVAL_PROMPT})
+
+        self._append_log(
+            "TIMEOUT",
+            f"Reached maximum of {self.max_iterations} iterations without GOAL_COMPLETE.",
+        )
+        self._finalize("TIMEOUT")
+        sync_vault()
+        result = (
+            f"Agent '{self.agent_name}' reached max iterations ({self.max_iterations}). "
+            f"Partial log at: {self.log_file}"
+        )
+        self._notify_chat(result)
+        return result
+
+    def run(self) -> str:
+        """Set up messages and execute the agent loop.
+
         Designed to be called inside asyncio.to_thread().
         """
         identity_block = (
@@ -291,67 +347,7 @@ class BackgroundAgent:
             {"role": "user", "content": f"Goal: {self.goal}"},
         ]
         self._append_log("INIT", f"Goal accepted: **{self.goal}**")
-
-        for iteration in range(1, self.max_iterations + 1):
-            self._append_log(
-                f"ITERATION {iteration} — OBSERVE / REASON",
-                "Calling LLM to determine next action…",
-            )
-
-            try:
-                data = self._llm_call()
-            except Exception as e:
-                msg = f"LLM call failed: {e}"
-                self._append_log("ERROR", msg)
-                self._finalize("FAILED")
-                return f"Agent '{self.agent_name}' failed: {e}"
-
-            choice = data["choices"][0]
-            message = choice["message"]
-            finish_reason = choice.get("finish_reason", "stop")
-
-            # --- ACT: tool calls ---
-            if finish_reason == "tool_calls" or message.get("tool_calls"):
-                tool_calls = message["tool_calls"]
-                self._messages.append({"role": "assistant", "tool_calls": tool_calls})
-
-                log_entries = self._execute_tool_calls(tool_calls)
-                self._append_log(
-                    f"ITERATION {iteration} — ACT",
-                    "\n\n".join(log_entries),
-                )
-                # Loop back for the next reasoning step
-                continue
-
-            # --- EVALUATE: text response ---
-            text = message.get("content") or ""
-            self._messages.append({"role": "assistant", "content": text})
-
-            if "GOAL_COMPLETE:" in text:
-                self._append_log("COMPLETE", text)
-                self._finalize("SUCCESS")
-                self._purge_temp()
-                sync_vault()
-                self._notify_chat(text)
-                return text
-
-            # Not done yet — log this reasoning step and prompt for evaluation
-            self._append_log(f"ITERATION {iteration} — EVALUATE", text)
-            self._messages.append({"role": "user", "content": _EVAL_PROMPT})
-
-        # Max iterations reached without completion
-        self._append_log(
-            "TIMEOUT",
-            f"Reached maximum of {self.max_iterations} iterations without GOAL_COMPLETE.",
-        )
-        self._finalize("TIMEOUT")
-        sync_vault()
-        result = (
-            f"Agent '{self.agent_name}' reached max iterations ({self.max_iterations}). "
-            f"Partial log at: {self.log_file}"
-        )
-        self._notify_chat(result)
-        return result
+        return self._run_loop()
 
     def _purge_temp(self) -> None:
         """Delete this agent's transient working directory from .agent_temp/."""
@@ -444,58 +440,7 @@ class SwarmAgent(BackgroundAgent):
         ]
         self._append_log("INIT", f"[{self.role}] Goal accepted: **{self.goal}**")
         self._append_log("SWARM", f"Project: `{self.project_id}` | Swarm: `{self.swarm_id}`")
-
-        for iteration in range(1, self.max_iterations + 1):
-            self._append_log(
-                f"ITERATION {iteration} — OBSERVE / REASON",
-                "Calling LLM to determine next action…",
-            )
-
-            try:
-                data = self._llm_call()
-            except Exception as e:
-                msg = f"LLM call failed: {e}"
-                self._append_log("ERROR", msg)
-                self._finalize("FAILED")
-                return f"Agent '{self.agent_name}' failed: {e}"
-
-            choice = data["choices"][0]
-            message = choice["message"]
-            finish_reason = choice.get("finish_reason", "stop")
-
-            if finish_reason == "tool_calls" or message.get("tool_calls"):
-                tool_calls = message["tool_calls"]
-                self._messages.append({"role": "assistant", "tool_calls": tool_calls})
-                log_entries = self._execute_tool_calls(tool_calls)
-                self._append_log(f"ITERATION {iteration} — ACT", "\n\n".join(log_entries))
-                continue
-
-            text = message.get("content") or ""
-            self._messages.append({"role": "assistant", "content": text})
-
-            if "GOAL_COMPLETE:" in text:
-                self._append_log("COMPLETE", text)
-                self._finalize("SUCCESS")
-                self._purge_temp()
-                sync_vault()
-                self._notify_chat(text)
-                return text
-
-            self._append_log(f"ITERATION {iteration} — EVALUATE", text)
-            self._messages.append({"role": "user", "content": _EVAL_PROMPT})
-
-        self._append_log(
-            "TIMEOUT",
-            f"Reached maximum of {self.max_iterations} iterations without GOAL_COMPLETE.",
-        )
-        self._finalize("TIMEOUT")
-        sync_vault()
-        result = (
-            f"Agent '{self.agent_name}' reached max iterations ({self.max_iterations}). "
-            f"Partial log at: {self.log_file}"
-        )
-        self._notify_chat(result)
-        return result
+        return self._run_loop()
 
 
 # ------------------------------------------------------------------
