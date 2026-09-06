@@ -52,11 +52,14 @@ A private Telegram bot that gives you conversational access to your local [Obsid
 
 - **Chat with your vault** — ask questions, get summaries, or search by meaning across all your notes
 - **Semantic search (RAG)** — `nomic-embed-text` embeddings + ChromaDB find relevant fragments by context, not just filenames
+- **Timeline search (SQL)** — SQLite index with FTS5 enables fast date-based and keyword search across sessions and memory logs; the LLM can query "what happened on date X" with precision
 - **Read & write notes** — the AI can read existing vault files or create new ones on your behalf
+- **Obsidian vault as source of proof** — all insights, sessions, and memory logs are written as plain Markdown in your local vault; nothing is ephemeral and everything is auditable
 - **Sovereign Memory Engine** — automatically extracts High-Value Insights (HVIs) from conversations and saves them as structured `SovereignLog` files in the vault; relevant past memories are injected into the system prompt at session start
 - **Memory continuity** — memory is extracted automatically every 20 messages, on `/clear`, and on bot shutdown so nothing is ever lost
 - **Vault watcher** — a background filesystem observer auto-indexes any `.md` file written to the vault outside of the bot (e.g. from Obsidian directly)
 - **Voice transcription** — send voice messages or audio files; transcribed locally using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) before being sent to the LLM
+- **Voice-to-voice hotline** — optional Twilio integration (`hotline.py`) streams phone calls through Deepgram STT → LLM → ElevenLabs TTS in real time
 - **Image understanding** — send photos with an optional caption; the LLM analyses them inline
 - **Website analysis** — share a URL and the bot fetches and extracts the page content (via trafilatura) for summarisation or saving
 - **Vault snapshots** — `/vault` summarises the last 5 exchanges and saves a structured note with wikilinks to related files
@@ -69,12 +72,15 @@ A private Telegram bot that gives you conversational access to your local [Obsid
 
 ```
 Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
-                   │         └──► tools.py ──► read_vault / write_vault / sync_vault
-                   │                      └──► analyze_website (trafilatura)
-                   │                      └──► vector.py (semantic search, ChromaDB)
+                   │         └──► tools/ ──► read_vault / write_vault / sync_vault
+                   │                    └──► analyze_website (trafilatura)
+                   │                    └──► search_vault_semantic ──► vector.py (ChromaDB)
+                   │                    └──► search_timeline ──► timeline.py (SQLite + FTS5)
                    │
                    └──► memory_manager.py ──► Sovereign Memory Engine (HVI extraction)
-                             └──► vector.py ──► ChromaDB (cosine search)
+                             └──► vector.py ──► ChromaDB (cosine / semantic search)
+                             └──► timeline.py ──► SQLite (date / keyword search)
+                             └──► Obsidian Vault ──► source of proof (plain Markdown)
 ```
 
 ---
@@ -130,6 +136,7 @@ OLLAMA_MODEL=llama3.1
 EMBED_BASE_URL=http://localhost:11434
 EMBED_MODEL=nomic-embed-text
 CHROMA_PATH=~/.sovereign-link/chroma         # where ChromaDB stores its index
+TIMELINE_DB=~/.sovereign-link/timeline.db   # SQLite timeline index (date + FTS search)
 
 # Vision model — optional, defaults to OLLAMA_MODEL
 # VISION_MODEL=llava                         # any vision-capable model (llava, qwen3-vl, etc.)
@@ -145,12 +152,19 @@ To find your Telegram user ID, message [@userinfobot](https://t.me/userinfobot).
 
 ### 5. Index your vault (first time only)
 
-**ChromaDB semantic index:**
+**Full rescan — ChromaDB semantic index + SQLite timeline index:**
 ```bash
-.venv/bin/python ingest.py
+.venv/bin/python ingest.py --rescan
 ```
 
-Re-run this script if you add many files outside of the bot. Files written via the bot are indexed automatically.
+This populates both indexes in one pass. Re-run after adding many files outside of the bot. Files written via the bot are indexed automatically.
+
+**Fix timeline dates (after migrations or sync issues):**
+```bash
+.venv/bin/python ingest.py --backfill
+```
+
+Scans `#YYYY-MM-DD` tags in note content and corrects any entries where the stored date is wrong (e.g. caused by filesystem date drift during a git sync).
 
 ### 6. Run the bot
 
@@ -213,13 +227,17 @@ flowchart LR
     TG["📱 Telegram\n(Command & Control)"]
     LLM["🧠 AI Model\n(LLM)"]
     SME["⚙️ Sovereign Memory Engine\n(Background Agents)"]
-    VDB["🗄️ Vector DB + Git\n(ChromaDB / GitHub)"]
-    OV["📂 Obsidian Vault\n(Markdown / Human Interface)"]
+    VDB["🗄️ ChromaDB\n(Semantic Search)"]
+    TL["🗃️ SQLite Timeline\n(Date & Keyword Search)"]
+    OV["📂 Obsidian Vault\n(Source of Proof)"]
 
     TG -->|user input| LLM
     LLM <-->|RAG · tool calls| SME
-    SME <-->|index · commit · retrieve| VDB
-    VDB <-->|read · write · sync| OV
+    SME <-->|embed · cosine retrieve| VDB
+    SME <-->|date · FTS5 retrieve| TL
+    SME <-->|read · write · commit| OV
+    VDB -.->|backed by| OV
+    TL -.->|backed by| OV
     LLM -->|response| TG
 ```
 
@@ -234,7 +252,7 @@ flowchart LR
 
 | Component | Role |
 |-----------|------|
-| 📂 **Obsidian Vault** | The human-readable interface to long-term memory. All structured knowledge lives here as navigable, linkable notes. |
+| 📂 **Obsidian Vault** | The human-readable interface to long-term memory and the **source of proof**. All structured knowledge lives here as navigable, linkable Markdown notes. Nothing is ephemeral — every session, insight, and memory log is auditable. |
 | **Markdown** | The universal, future-proof data format. Plain text with `[[wikilinks]]` ensures portability across any tool or era. |
 | **Git / GitHub** | The backbone for version control, multi-device synchronization, and disaster recovery. Every vault write is committed and pushed automatically. |
 
@@ -243,7 +261,8 @@ flowchart LR
 | Component | Role |
 |-----------|------|
 | **RAG** | Grounds the AI in the Vault's truth rather than generic training data. Relevant fragments are retrieved and injected into context before every response. |
-| 🗄️ **Vector Database (ChromaDB)** | Enables semantic search. Information is retrieved by meaning and context — not just filename or keyword match. Powered by `nomic-embed-text` embeddings running locally. |
+| 🗄️ **ChromaDB (Semantic Search)** | Enables search by meaning and context — not just filename or keyword match. Powered by `nomic-embed-text` embeddings running locally. Used for topic-based queries: "what do I know about X?" |
+| 🗃️ **SQLite Timeline Index (Temporal Search)** | A parallel index alongside ChromaDB for reliable date-based queries. Stores every vault file with extracted date, time, and session ID. Supports FTS5 full-text search combined with date filters. Used when the LLM needs to answer "what happened on date X?" — something vector search cannot do reliably. DB at `~/.sovereign-link/timeline.db`. |
 | ⚙️ **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights (HVIs), synthesize structured `SovereignLog` files, build associative `[[wikilinks]]` to prior memory, and commit everything to git — automatically and continuously. |
 | **Active Context Layer (ACL)** | A high-priority briefing file (`.system/active_briefing.md`) that dynamically steers AI behavior based on the user's current operational state, priorities, and active focus areas. Loaded at session start to orient every interaction. |
 
@@ -257,10 +276,12 @@ flowchart LR
 ### Data Flow
 
 1. A message arrives via **Telegram** and is passed to the 🧠 **LLM**.
-2. The LLM issues tool calls to the ⚙️ **Sovereign Memory Engine**, which queries the 🗄️ **Vector DB** for semantically relevant vault fragments.
+2. The LLM issues tool calls to retrieve context:
+   - **`search_vault_semantic`** → 🗄️ **ChromaDB** for topic/meaning-based queries
+   - **`search_timeline`** → 🗃️ **SQLite Timeline** for date- or keyword-filtered queries
 3. Retrieved context is injected into the LLM's reasoning window alongside the **ACL briefing**.
-4. The LLM formulates a response and may invoke write tools — creating or updating 📂 **Markdown** notes in the **Obsidian Vault**.
-5. All writes are committed via **Git** and pushed to **GitHub** for synchronization and backup.
+4. The LLM formulates a response and may invoke write tools — creating or updating 📂 **Markdown** notes in the **Obsidian Vault** (the source of proof).
+5. Every vault write is automatically indexed into both ChromaDB and the SQLite timeline, then committed via **Git** and pushed to **GitHub**.
 6. Every 20 messages (and on `/clear` or shutdown), the Sovereign Memory Engine extracts HVIs, writes a `SovereignLog`, and pushes it — ensuring no insight is ever lost.
 
 ---
@@ -269,16 +290,45 @@ flowchart LR
 
 ```
 sovereign-link/
-├── main.py               # Entry point
-├── bot.py                # Telegram handlers and command routing
-├── llm.py                # Ollama LLM client, tool call loop, audio transcription
-├── context.py            # In-memory conversation history
-├── tools.py              # Vault tools: read, write, sync, semantic search, web fetch
-├── vector.py             # ChromaDB + Ollama embedding logic + filesystem watcher
-├── memory_manager.py     # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
-├── ingest.py             # One-shot ChromaDB vault indexer
+├── main.py                   # Entry point
+├── bot.py                    # Telegram handlers and command routing
+├── llm.py                    # Ollama LLM client, tool call loop, audio transcription
+├── context.py                # In-memory conversation history
+├── memory_manager.py         # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
+├── vector.py                 # ChromaDB + Ollama embedding logic + filesystem watcher
+├── timeline.py               # SQLite timeline index: date/FTS5 search across vault
+├── ingest.py                 # Vault indexer: --rescan (full), --backfill (fix dates)
+│
+├── tools/                    # Tool registry (one submodule per domain)
+│   ├── vault.py              # read_vault, write_vault, sync_vault
+│   ├── search.py             # search_vault_semantic (ChromaDB), search_timeline (SQLite)
+│   ├── http.py               # analyze_website (trafilatura)
+│   ├── browser_tools.py      # Playwright browser automation
+│   ├── agent_tools.py        # Agent blackboard / subagent coordination
+│   ├── scheduler_tools.py    # Scheduled reminders and recurring tasks
+│   ├── notification_tools.py # Push notifications
+│   ├── automation_tools.py   # Vault-based automation rules
+│   ├── personality_tools.py  # Luna persona management
+│   └── moltbook.py           # Moltbook integration
+│
+├── agent.py                  # Subagent orchestration
+├── automations.py            # Automation rule engine
+├── browser.py                # Playwright browser session manager
+├── chat_bridge.py            # Cross-channel message bridge
+├── hotline.py                # Voice-to-voice hotline (Twilio → Deepgram → LLM → ElevenLabs)
+├── notifications.py          # Push notification dispatcher
+├── personality.py            # Luna persona loader
+├── proactive.py              # Proactive message engine
+├── scheduler.py              # Task scheduler
+├── session_logger.py         # Structured session logging
+├── timezone_manager.py       # Timezone detection and handling
+├── vault_analyzer.py         # Vault usage and growth statistics
+├── vault_migrate.py          # Vault migration utilities
+├── luna_persona.md           # Luna's persona definition
+│
 ├── requirements.txt
-└── sovereign-link.service  # systemd unit
+├── sovereign-link.service    # systemd unit (bot)
+└── hotline.service           # systemd unit (voice hotline)
 ```
 
 ---
