@@ -20,6 +20,25 @@ _VAULT_LOG_KEYWORDS = ("execution", "synthesis")
 _TS_PATTERN = re.compile(r'#\d{4}-\d{2}-\d{2}(?:\s+#\d{2})+\s*$', re.MULTILINE)
 _TAG_PATTERN = re.compile(r'(?<!\d)#([A-Za-zÀ-ÿ]\w*)')
 
+# Sovereign Truth Protocol — allowed evidentiality tags
+STS_VALID_TAGS = frozenset({
+    "#ev-direct", "#ev-derived", "#ev-reported", "#ev-assumed", "#ev-luna-hypo"
+})
+
+
+def _inject_ev_tag(content: str, ev_tag: str) -> str:
+    """Insert or update the STS ev_tag field in YAML frontmatter."""
+    tag_line = f"ev_tag: {ev_tag}"
+    if content.startswith("---"):
+        end = content.find("\n---", 3)
+        if end != -1:
+            fm_body = content[3:end]
+            lines = [l for l in fm_body.splitlines() if not l.startswith("ev_tag:")]
+            lines.append(tag_line)
+            rest = content[end + 4:]
+            return "---\n" + "\n".join(lines) + "\n---" + rest
+    return f"---\n{tag_line}\n---\n{content}"
+
 
 def _is_log_filename(file_name: str) -> bool:
     if "/" in file_name or os.sep in file_name:
@@ -55,7 +74,7 @@ def read_vault(file_name: str) -> str:
         return f"Error reading file: {e}"
 
 
-def write_vault(file_name: str, content: str, timestamp: str | None = None) -> str:
+def write_vault(file_name: str, content: str, timestamp: str | None = None, ev_tag: str | None = None) -> str:
     if _is_log_filename(file_name):
         safe_name = os.path.basename(file_name)
         redirect_path = os.path.join(PROJECT_LOGS_PATH, "redirected", safe_name)
@@ -88,6 +107,18 @@ def write_vault(file_name: str, content: str, timestamp: str | None = None) -> s
     except Exception:
         return "Error: path traversal not allowed"
 
+    # Sovereign Truth Protocol: validate and inject evidentiality tag
+    sts_warning = ""
+    if ev_tag is None:
+        ev_tag = "#ev-assumed"
+        sts_warning = " [STS: no ev_tag provided — defaulted to #ev-assumed]"
+    elif ev_tag not in STS_VALID_TAGS:
+        return (
+            f"Error: invalid ev_tag '{ev_tag}'. "
+            f"Must be one of: {', '.join(sorted(STS_VALID_TAGS))}"
+        )
+    content = _inject_ev_tag(content, ev_tag)
+
     time_tags = datetime.now().strftime("#%Y-%m-%d #%H #%M")
     tagged_content = content.rstrip() + f"\n\n{time_tags}\n"
     tagged_content = _auto_link_to_moc(file_name, tagged_content)
@@ -111,7 +142,7 @@ def write_vault(file_name: str, content: str, timestamp: str | None = None) -> s
     except Exception:
         logger.exception("write_vault: timeline indexing failed for %s", file_name)
 
-    return f"Written successfully to '{file_name}'"
+    return f"Written successfully to '{file_name}'{sts_warning}"
 
 
 def sync_vault() -> str:
@@ -170,7 +201,7 @@ def cleanup_transient_data(agent_id: str) -> str:
         return f"Error during cleanup: {e}"
 
 
-def commit_to_vault(temp_file_name: str, vault_file_name: str) -> str:
+def commit_to_vault(temp_file_name: str, vault_file_name: str, ev_tag: str | None = None) -> str:
     temp_path = os.path.join(AGENT_TEMP_PATH, temp_file_name)
     if not os.path.realpath(temp_path).startswith(os.path.realpath(AGENT_TEMP_PATH)):
         return "Error: path traversal not allowed"
@@ -182,7 +213,7 @@ def commit_to_vault(temp_file_name: str, vault_file_name: str) -> str:
     except Exception as e:
         return f"Error reading temp file: {e}"
 
-    result = write_vault(vault_file_name, content)
+    result = write_vault(vault_file_name, content, ev_tag=ev_tag)
     if result.startswith("Error"):
         return result
 
@@ -407,12 +438,12 @@ def inject_links(link_matrix_json: str) -> str:
 
 DEFINITIONS = [
     {"type": "function", "function": {"name": "read_vault", "description": "Read a file from the fractalisme vault.", "parameters": {"type": "object", "properties": {"file_name": {"type": "string", "description": "The file name (or relative path) to read from the vault."}}, "required": ["file_name"]}}},
-    {"type": "function", "function": {"name": "write_vault", "description": "Write or overwrite a file in the fractalisme vault.", "parameters": {"type": "object", "properties": {"file_name": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_name", "content"]}}},
+    {"type": "function", "function": {"name": "write_vault", "description": "Write or overwrite a file in the fractalisme vault. REQUIRED: provide ev_tag (Sovereign Truth Protocol). Allowed values: #ev-direct (firsthand observation), #ev-derived (logical synthesis), #ev-reported (external source), #ev-assumed (hypothesis), #ev-luna-hypo (Luna intuition — must be confirmed before promotion to #ev-direct). Omitting ev_tag defaults to #ev-assumed with a warning.", "parameters": {"type": "object", "properties": {"file_name": {"type": "string"}, "content": {"type": "string"}, "ev_tag": {"type": "string", "enum": ["#ev-direct", "#ev-derived", "#ev-reported", "#ev-assumed", "#ev-luna-hypo"], "description": "STS evidentiality tag — provenance of the information being written."}}, "required": ["file_name", "content"]}}},
     {"type": "function", "function": {"name": "sync_vault", "description": "Commit and push all vault changes to git.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "write_temp", "description": "Write a transient/working-memory file to .agent_temp/. NEVER indexed.", "parameters": {"type": "object", "properties": {"file_name": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_name", "content"]}}},
     {"type": "function", "function": {"name": "read_temp", "description": "Read a transient file from .agent_temp/ (working memory).", "parameters": {"type": "object", "properties": {"file_name": {"type": "string"}}, "required": ["file_name"]}}},
     {"type": "function", "function": {"name": "cleanup_transient_data", "description": "Purge all transient working-memory files for a given agent_id from .agent_temp/.", "parameters": {"type": "object", "properties": {"agent_id": {"type": "string"}}, "required": ["agent_id"]}}},
-    {"type": "function", "function": {"name": "commit_to_vault", "description": "Promote a finalized draft from .agent_temp/ to the Sovereign Vault.", "parameters": {"type": "object", "properties": {"temp_file_name": {"type": "string"}, "vault_file_name": {"type": "string"}}, "required": ["temp_file_name", "vault_file_name"]}}},
+    {"type": "function", "function": {"name": "commit_to_vault", "description": "Promote a finalized draft from .agent_temp/ to the Sovereign Vault. Provide ev_tag (STS) to stamp provenance on commit.", "parameters": {"type": "object", "properties": {"temp_file_name": {"type": "string"}, "vault_file_name": {"type": "string"}, "ev_tag": {"type": "string", "enum": ["#ev-direct", "#ev-derived", "#ev-reported", "#ev-assumed", "#ev-luna-hypo"], "description": "STS evidentiality tag — provenance of the information being committed."}}, "required": ["temp_file_name", "vault_file_name"]}}},
     {"type": "function", "function": {"name": "list_files", "description": "Recursively list all files in a vault directory.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "move_file", "description": "Move or rename a file within the vault.", "parameters": {"type": "object", "properties": {"source_path": {"type": "string"}, "destination_path": {"type": "string"}}, "required": ["source_path", "destination_path"]}}},
     {"type": "function", "function": {"name": "delete_file", "description": "Permanently delete a file from the vault.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": ["file_path"]}}},
@@ -422,12 +453,12 @@ DEFINITIONS = [
 
 HANDLERS = {
     "read_vault": lambda args: read_vault(args["file_name"]),
-    "write_vault": lambda args: write_vault(args["file_name"], args["content"]),
+    "write_vault": lambda args: write_vault(args["file_name"], args["content"], ev_tag=args.get("ev_tag")),
     "sync_vault": lambda args: sync_vault(),
     "write_temp": lambda args: write_temp(args["file_name"], args["content"]),
     "read_temp": lambda args: read_temp(args["file_name"]),
     "cleanup_transient_data": lambda args: cleanup_transient_data(args["agent_id"]),
-    "commit_to_vault": lambda args: commit_to_vault(args["temp_file_name"], args["vault_file_name"]),
+    "commit_to_vault": lambda args: commit_to_vault(args["temp_file_name"], args["vault_file_name"], ev_tag=args.get("ev_tag")),
     "list_files": lambda args: list_files(args.get("directory", "")),
     "move_file": lambda args: move_file(args["source_path"], args["destination_path"]),
     "delete_file": lambda args: delete_file(args["file_path"]),
