@@ -98,6 +98,8 @@ def attempt_comment_auto_recovery(
     except urllib.error.HTTPError as e:
         if e.code != 404:
             return None  # non-404 error — let caller handle it
+    except Exception:
+        return None  # network error, timeout, etc. — let caller handle it
 
     # Post returned 404 — attempt auto-recovery
     username = extract_mention_username(data)

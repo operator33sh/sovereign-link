@@ -121,13 +121,22 @@ def http_request(method: str, url: str, headers: dict | None = None, body=None) 
                 f"BODY:       {body_text}"
             )
 
-        # Fix 1: 409 on /verify means the verification was already processed — break the loop
-        if is_moltbook and e.code == 409 and "/verify" in parsed.path:
-            _moltbook_debug_log(f"409 TERMINAL: verificatie al voltooid — loop beëindigd")
-            return (
-                "Verificatie al voltooid — de content is al gepubliceerd. "
-                "Geen verdere actie nodig. Gebruik GET /api/v1/home om de publicatie te bevestigen."
-            )
+        # Fix 1: any /verify failure is terminal — never retry, never re-post the comment
+        if is_moltbook and "/verify" in parsed.path:
+            if e.code == 409:
+                _moltbook_debug_log(f"409 TERMINAL: verificatie al voltooid — loop beëindigd")
+                return (
+                    "Verificatie al voltooid — de content is al gepubliceerd. "
+                    "Geen verdere actie nodig. Gebruik GET /api/v1/home om de publicatie te bevestigen."
+                )
+            else:
+                _moltbook_debug_log(
+                    f"VERIFY TERMINAL {e.code}: verificatie mislukt — loop beëindigd\nBODY: {body_text}"
+                )
+                return (
+                    f"Verificatie mislukt ({e.code}). Probeer NIET opnieuw — meld dit aan de gebruiker. "
+                    "Geef geen nieuwe reactie meer door voor dit bericht."
+                )
 
         # Fix 4: 429 rate limit — parse retry_after and return a terminal message
         if e.code == 429:
