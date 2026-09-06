@@ -1,6 +1,8 @@
 """Generic HTTP request tool with Moltbook guard integration."""
 import json
 import logging
+import os
+import re
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -8,6 +10,24 @@ from urllib.parse import urlparse
 from tools.moltbook import _moltbook_debug_log, attempt_comment_auto_recovery
 
 logger = logging.getLogger(__name__)
+
+# Strict RFC-4122 UUID pattern — rejects numeric IDs, hallucinated UUIDs with non-hex chars, etc.
+_STRICT_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+def _get_moltbook_api_key() -> str:
+    """Return the Moltbook API key from env or ~/.config/moltbook/credentials.json."""
+    api_key = os.environ.get("MOLTBOOK_API_KEY", "").strip()
+    if api_key and api_key != "YOUR_API_KEY_HERE":
+        return api_key
+    creds_path = os.path.expanduser("~/.config/moltbook/credentials.json")
+    try:
+        with open(creds_path) as f:
+            return json.load(f).get("api_key", "").strip()
+    except Exception:
+        return ""
 
 
 def http_request(method: str, url: str, headers: dict | None = None, body=None) -> str:
@@ -20,6 +40,29 @@ def http_request(method: str, url: str, headers: dict | None = None, body=None) 
         return f"Error: unsupported HTTP method '{method}'"
 
     is_moltbook = "moltbook.com" in (parsed.netloc or "")
+
+    # Fix 2: auto-inject Authorization header for Moltbook if absent
+    if is_moltbook:
+        if headers is None:
+            headers = {}
+        if not any(k.lower() == "authorization" for k in headers):
+            api_key = _get_moltbook_api_key()
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+
+    # Fix 3: reject invalid post IDs in comment endpoints before hitting the network
+    if is_moltbook and method == "POST":
+        m = re.search(r"/posts/([^/]+)/comments", parsed.path)
+        if m:
+            candidate = m.group(1)
+            if not _STRICT_UUID_RE.match(candidate):
+                msg = (
+                    f"Error: '{candidate}' is geen geldig UUID. "
+                    "Gebruik GET /api/v1/feed of GET /api/v1/agents/profile "
+                    "om de correcte post_id (UUID-formaat: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) op te halen."
+                )
+                _moltbook_debug_log(f"UUID VALIDATION BLOCKED: {url}\nREASON: '{candidate}' is not a valid UUID")
+                return msg
 
     data: bytes | None = None
     if body is not None:
@@ -45,8 +88,7 @@ def http_request(method: str, url: str, headers: dict | None = None, body=None) 
 
     # Moltbook comment guard: verify post exists before posting
     if is_moltbook and method == "POST":
-        import re as _re
-        m = _re.search(r"/posts/([0-9a-f-]{36})/comments", parsed.path)
+        m = re.search(r"/posts/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/comments", parsed.path)
         if m:
             post_uuid = m.group(1)
             recovery_result = attempt_comment_auto_recovery(
@@ -78,6 +120,31 @@ def http_request(method: str, url: str, headers: dict | None = None, body=None) 
                 f"STATUS:     {e.code} {e.reason}\n"
                 f"BODY:       {body_text}"
             )
+
+        # Fix 1: 409 on /verify means the verification was already processed — break the loop
+        if is_moltbook and e.code == 409 and "/verify" in parsed.path:
+            _moltbook_debug_log(f"409 TERMINAL: verificatie al voltooid — loop beëindigd")
+            return (
+                "Verificatie al voltooid — de content is al gepubliceerd. "
+                "Geen verdere actie nodig. Gebruik GET /api/v1/home om de publicatie te bevestigen."
+            )
+
+        # Fix 4: 429 rate limit — parse retry_after and return a terminal message
+        if e.code == 429:
+            retry_after = None
+            try:
+                err_data = json.loads(body_text)
+                retry_after = err_data.get("retry_after_seconds")
+            except Exception:
+                pass
+            wait_msg = f" Wacht {retry_after} seconden voor de volgende poging." if retry_after else ""
+            if is_moltbook:
+                _moltbook_debug_log(f"429 RATE LIMIT TERMINAL: {url}\nretry_after: {retry_after}s")
+            return (
+                f"Rate limited (429) — doe geen nieuwe request voor de limiet verstreken is.{wait_msg} "
+                "Vertel de gebruiker dat je even moet wachten."
+            )
+
         return f"HTTP Error {e.code}: {e.reason}\n\n{body_text}"
     except urllib.error.URLError as e:
         if is_moltbook:
@@ -111,7 +178,15 @@ DEFINITIONS = [
                 "Use this to interact with external APIs such as the Moltbook API "
                 "(https://www.moltbook.com/api/v1). "
                 "Supports custom headers and a request body. "
-                "Returns the HTTP status code and response body. Times out after 30 seconds."
+                "Returns the HTTP status code and response body. Times out after 30 seconds.\n\n"
+                "MOLTBOOK-SPECIFIC RULES:\n"
+                "- The Authorization header is injected automatically — you do not need to add it manually.\n"
+                "- Endpoints always use the plural form: /api/v1/posts/ (NOT /api/v1/post/).\n"
+                "- post_id must be a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). "
+                "Never use numeric IDs or invented UUIDs. Fetch the correct post_id via "
+                "GET /api/v1/feed or GET /api/v1/agents/profile first.\n"
+                "- If you receive 'Rate limited (429)': stop retrying and wait the stated number of seconds.\n"
+                "- If you receive 'Verificatie al voltooid': the content is published — do NOT call /verify again."
             ),
             "parameters": {
                 "type": "object",

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENT_TEMP_PATH = os.path.join(PROJECT_ROOT, ".agent_temp")
 
-_UUID_RE = re.compile(r"/posts/([0-9a-f-]{36})/comments")
+_UUID_RE = re.compile(r"/posts/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/comments")
 
 
 def _moltbook_debug_log(entry: str) -> None:
