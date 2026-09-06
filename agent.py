@@ -10,6 +10,7 @@ Luna can spawn, monitor and manage agents via tool calls.
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -161,8 +162,10 @@ class BackgroundAgent:
         date_str = datetime.now().strftime("%Y-%m-%d")
         ts_str = datetime.now().strftime("%H%M%S")
         self._temp_dir_name = f"{agent_name}_{ts_str}"
+        # Sanitize agent_name for use in filename: strip special chars, cap at 50
+        _safe_name = re.sub(r'[^\w\-]', '_', agent_name)[:50].strip('_')
         # Execution log lives outside the vault — never indexed, never synced to git
-        self.log_file = os.path.join(LOGS_PATH, f"{agent_name}_{date_str}_{ts_str}.md")
+        self.log_file = os.path.join(LOGS_PATH, f"{_safe_name}_{date_str}_{ts_str}.md")
         self._log_lines: list[str] = [
             f"# Agent Log — {date_str}\n\n",
             f"**Agent:** {agent_name}  \n",
