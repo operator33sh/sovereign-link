@@ -303,6 +303,42 @@ def _fetch_latest_comment(pid: str) -> tuple[str, str, str]:
     return author, snippet, post_title
 
 
+_SENTINEL_LATEST_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", ".agent_temp", "moltbook_sentinel_latest.json",
+)
+
+
+def _save_latest(activities: list[dict], report_lines: list[str]) -> None:
+    """Persist the most recently reported activity so the agent has context.
+
+    Stored in .agent_temp/moltbook_sentinel_latest.json.
+    The agent can read this file when the user asks a follow-up question
+    (e.g. "open that post", "show me what they said") after a Telegram alert.
+    """
+    try:
+        os.makedirs(os.path.dirname(_SENTINEL_LATEST_PATH), exist_ok=True)
+        payload = {
+            "reported_at": datetime.now(timezone.utc).isoformat(),
+            "report_lines": report_lines,
+            "posts": [
+                {
+                    "post_id": a.get("post_id"),
+                    "post_title": a.get("post_title"),
+                    "submolt": a.get("submolt_name"),
+                    "commenters": a.get("latest_commenters", []),
+                    "count": a.get("new_notification_count", 1),
+                }
+                for a in activities
+                if a.get("post_id")
+            ],
+        }
+        with open(_SENTINEL_LATEST_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception:
+        logger.debug("Sentinel: could not write latest activity file (non-fatal)")
+
+
 # ─── Core sentinel logic ──────────────────────────────────────────────────────
 
 def run_moltbook_sentinel(_args: dict | None = None) -> str:
@@ -440,16 +476,16 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
     except Exception as e:
         return f"Sentinel: notification_manager.write failed — {e}"
 
-    # ── 7. Mark all as read on Moltbook ──────────────────────────────────────
-    read_all_status = _post(_READ_ALL_URL)
-    if read_all_status not in (200, 204):
-        for pid in seen_post_ids:
-            try:
-                _post(_READ_BY_POST_TEMPLATE.format(id=pid))
-            except Exception as e:
-                logger.warning("Sentinel: could not mark post %s as read: %s", pid, e)
+    # ── 7. Save latest activity for agent context ─────────────────────────────
+    # Written to .agent_temp so the agent can reference which posts/follows
+    # were just reported without needing Moltbook to still show them as unread.
+    _save_latest(new_activities, report_lines)
 
     # ── 8. Update seen cache ──────────────────────────────────────────────────
+    # NOTE: We intentionally do NOT call POST /notifications/read-all here.
+    # The local seen cache prevents re-reporting. Keeping Moltbook notifications
+    # unread means the agent can still look up the relevant posts via /home when
+    # the user asks a follow-up question after receiving the Telegram alert.
     now_iso = datetime.now(timezone.utc).isoformat()
     for pid in seen_post_ids:
         seen["home_" + pid] = now_iso
@@ -460,8 +496,7 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
 
     summary = (
         f"Sentinel[ok]: {len(new_activities)} home activities + "
-        f"{len(seen_notif_ids)} notifications → 1 report pushed | "
-        f"read-all={read_all_status}"
+        f"{len(seen_notif_ids)} notifications → 1 report pushed"
     )
     logger.info(summary)
     return summary
