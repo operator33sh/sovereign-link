@@ -359,7 +359,14 @@ def _run_tool_loop(messages: list, max_iter: int = 10):
                 except json.JSONDecodeError:
                     fn_args = {}
                 handler = TOOL_HANDLERS.get(fn_name)
-                result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
+                try:
+                    result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
+                except Exception as _tool_exc:
+                    logger.exception("Tool handler '%s' raised unexpectedly: %s", fn_name, _tool_exc)
+                    result = f"Error: tool '{fn_name}' failed — {_tool_exc}"
+                # Truncate before storing so context never balloons from large payloads
+                if isinstance(result, str) and len(result) > _TOOL_RESULT_CAP:
+                    result = result[:_TOOL_RESULT_CAP] + "\n[…output truncated]"
                 context.add_tool_result(tc["id"], result)
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
             continue
@@ -643,7 +650,7 @@ def run_triggered() -> str:
     return result
 
 
-def run(user_message: str) -> str:
+def run(user_message: str, msg_timestamp: "datetime | None" = None) -> str:
     global _personality_seeded
     is_first = not context.get_history()  # check before add_message
     context.add_message("user", user_message)
@@ -653,7 +660,11 @@ def run(user_message: str) -> str:
         _personality.ensure_seeded()
         _personality_seeded = True
 
-    timestamp = datetime.now(tz=_get_local_tz()).strftime("%Y-%m-%d %H:%M:%S")
+    if msg_timestamp is not None:
+        ts_local = msg_timestamp.astimezone(_get_local_tz())
+    else:
+        ts_local = datetime.now(tz=_get_local_tz())
+    timestamp = ts_local.strftime("%Y-%m-%d %H:%M:%S")
     system_with_time = f"{_build_system_prompt()}\n\nCurrent date and time: {timestamp}. This is context only — do not act on it."
 
     if is_first:
