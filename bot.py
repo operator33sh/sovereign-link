@@ -381,7 +381,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         try:
             reply = await asyncio.wait_for(
-                asyncio.to_thread(llm.run, transcription),
+                asyncio.to_thread(llm.run, transcription, update.message.date),
                 timeout=LLM_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -517,7 +517,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     typing_task = asyncio.create_task(keep_typing())
     try:
         reply = await asyncio.wait_for(
-            asyncio.to_thread(llm.run, user_text),
+            asyncio.to_thread(llm.run, user_text, update.message.date),
             timeout=LLM_TIMEOUT,
         )
     except asyncio.TimeoutError:
@@ -633,7 +633,11 @@ async def cmd_syscheck(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     asyncio.create_task(_run_syscheck_background(update))
 
 
-async def _set_commands(app: Application) -> None:
+async def _post_init(app: Application) -> None:
+    """Initialize loop and commands immediately on bot start — before any user message."""
+    global _proactive_loop
+    _proactive_loop = asyncio.get_event_loop()
+    logger.info("ProactiveDispatcher: event loop registered at startup")
     await app.bot.set_my_commands([
         BotCommand("start", "Check if the bot is online"),
         BotCommand("clear", "Clear the current session context"),
@@ -680,7 +684,7 @@ async def _on_shutdown(app: Application) -> None:
 def build_app() -> Application:
     _scheduler.start()
     _automation_engine.start()
-    app = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(True).post_init(_set_commands).post_shutdown(_on_shutdown).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(True).post_init(_post_init).post_shutdown(_on_shutdown).build()
 
     # Wire proactive dispatcher: send_fn uses app.bot.send_message so it can
     # push to the chat from background threads without an active update context.

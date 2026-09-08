@@ -233,7 +233,13 @@ class ProactiveDispatcher:
         header = "📬 *Nieuw bericht:*\n\n" if n == 1 else f"📬 *{n} nieuwe berichten:*\n\n"
         message = header + "\n\n".join(lines)
 
-        # Mark as delivered atomically before sending
+        try:
+            self._send_fn(message)
+        except Exception:
+            logger.exception("ProactiveDispatcher: send failed")
+            return  # leave notifications pending — will retry on next signal
+
+        # Mark as delivered only after confirmed send
         pushed_ids = {e["id"] for e in push_entries}
         with notification_manager._lock:
             all_entries = notification_manager._load()
@@ -242,13 +248,9 @@ class ProactiveDispatcher:
                     e["status"] = "delivered"
             notification_manager._save(all_entries)
 
-        try:
-            self._send_fn(message)
-            with self._last_push_lock:
-                self._last_push = datetime.now(timezone.utc)
-            logger.info("ProactiveDispatcher: pushed %d notification(s)", n)
-        except Exception:
-            logger.exception("ProactiveDispatcher: send failed")
+        with self._last_push_lock:
+            self._last_push = datetime.now(timezone.utc)
+        logger.info("ProactiveDispatcher: pushed %d notification(s)", n)
 
     def _run_loop(self) -> None:
         logger.info("ProactiveDispatcher: daemon started")
