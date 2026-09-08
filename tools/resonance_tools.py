@@ -653,7 +653,7 @@ HANDLERS = {
         args["test_id"], args["stimulus_text"], args["frequency_type"], args["target_agents"]
     ),
     "capture_resonance_snapshot": lambda args: capture_resonance_snapshot(
-        args["test_id"], args["agent_responses_json"]
+        args["test_id"], args.get("agent_responses_json", "[]")
     ),
     "analyze_resonance_trajectory": lambda args: analyze_resonance_trajectory(args["test_id"]),
     "spawn_resonance_monitor": lambda args: spawn_resonance_monitor(
