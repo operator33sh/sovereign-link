@@ -92,73 +92,102 @@ def _post(url: str) -> int:
         return 0
 
 
+# ─── Unread filter ────────────────────────────────────────────────────────────
+
+def _filter_unread(notifications: list[dict]) -> list[dict]:
+    """Return only unread notifications.
+
+    If the API exposes an explicit 'read' or 'is_read' flag, respect it.
+    If no such flag exists on any item, treat ALL items as candidates — the
+    seen-IDs dedup layer prevents duplicate pushes.
+    """
+    has_read_flag = any(
+        "read" in n or "is_read" in n
+        for n in notifications
+    )
+    if not has_read_flag:
+        return notifications  # dedup handles it
+    return [
+        n for n in notifications
+        if not n.get("read") and not n.get("is_read")
+    ]
+
+
+# ─── Heartbeat logging ─────────────────────────────────────────────────────────
+
+def _heartbeat_log(endpoint: str, status: int, data) -> None:
+    """Write a one-line heartbeat to the automation log path for observability."""
+    import json as _json
+    try:
+        log_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", ".agent_temp", "moltbook_sentinel_heartbeat.log",
+        )
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        ts = datetime.now(timezone.utc).isoformat()
+        if isinstance(data, (dict, list)):
+            snippet = _json.dumps(data)[:200]
+        else:
+            snippet = str(data)[:200] if data else "None"
+        line = f"{ts} | {endpoint} | status={status} | {snippet}\n"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        logger.debug("Sentinel: heartbeat log write failed (non-fatal)")
+
+
 # ─── Core sentinel logic ──────────────────────────────────────────────────────
 
 def run_moltbook_sentinel(_args: dict | None = None) -> str:
     """
     Main entry point called by AutomationEngine.
 
-    Returns a short status string that is stored in automation_logs.json.
+    Strategy: skip /home entirely — go straight to /notifications and rely
+    on deduplication (seen-IDs) as the reliability layer. This avoids
+    fragile field-name guessing on the /home response.
+
+    Returns a short heartbeat string stored in automation_logs.json.
     """
     from notifications import notification_manager
 
-    # 1. Fetch /home to get unread count
-    status, home_data = _get(_HOME_URL)
-    if status == 0 or home_data is None:
-        return "Sentinel: /home request failed — skipping"
-    if status == 429:
-        return "Sentinel: rate limited — skipping this cycle"
-    if status >= 400:
-        return f"Sentinel: /home returned HTTP {status} — skipping"
-
-    # Handle briefing format from payload filter
-    if isinstance(home_data, dict) and "_raw" in home_data:
-        raw_text = home_data["_raw"]
-        if "MOLTBOOK BRIEFING" in raw_text:
-            logger.info("Sentinel: /home returned briefing — parsing unread from text")
-            # Try to extract unread_notification_count from briefing text
-            unread = _extract_unread_from_briefing(raw_text)
-        else:
-            unread = 0
-    else:
-        unread = (
-            home_data.get("unread_notification_count")
-            or home_data.get("unread_notifications")
-            or home_data.get("unreadCount")
-            or 0
-        )
-
-    if not unread:
-        logger.debug("Sentinel: no unread notifications")
-        return "Sentinel: no unread notifications"
-
-    # 2. Fetch notifications list
+    # 1. Fetch /notifications directly — dedup handles "already seen" items
     notif_status, notif_data = _get(_NOTIFICATIONS_URL)
-    if notif_status >= 400 or notif_data is None:
-        return f"Sentinel: /notifications returned HTTP {notif_status}"
+
+    # Heartbeat: always log what the API actually returned
+    _heartbeat_log("notifications", notif_status, notif_data)
+
+    if notif_status == 0 or notif_data is None:
+        return "Sentinel: /notifications request failed — skipping"
+    if notif_status == 429:
+        return "Sentinel: rate limited — skipping this cycle"
+    if notif_status >= 400:
+        return f"Sentinel: /notifications returned HTTP {notif_status} — skipping"
 
     notifications = _extract_notifications(notif_data)
     if not notifications:
-        return "Sentinel: /home reports unread but /notifications list is empty"
+        return f"Sentinel[heartbeat]: /notifications returned 0 items (status={notif_status})"
+
+    # 2. Filter to only unread items where the API exposes a read flag;
+    #    if no read flag exists, treat ALL items as candidates — dedup prevents spam
+    unread = _filter_unread(notifications)
 
     # 3. Load deduplication state
     seen = _evict_old(_load_seen())
     new_count = 0
     errors = []
 
-    for notif in notifications:
+    for notif in unread:
         notif_id = str(
             notif.get("id") or notif.get("notification_id") or notif.get("post_id") or ""
         )
         if not notif_id or notif_id in seen:
             continue
 
-        # Build alert content
         author = _extract_author(notif)
         preview = _extract_preview(notif)
-        content = f"Moltbook Signal: New notification from @{author} regarding '{preview}'"
+        # Classify priority: comments/mentions always high; rest also high per spec
+        content = f"Moltbook Signal: New notification from @{author} — '{preview}'"
 
-        # Push to notification queue
         try:
             notification_manager.write(
                 content=content,
@@ -168,22 +197,26 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
             )
             new_count += 1
         except Exception as e:
-            errors.append(f"write_notification failed for {notif_id}: {e}")
+            errors.append(f"write failed for {notif_id}: {e}")
             continue
 
-        # Mark as read on Moltbook
+        # Mark as read on Moltbook (best-effort)
         read_url = _READ_URL_TEMPLATE.format(id=notif_id)
         try:
             _post(read_url)
         except Exception as e:
             logger.warning("Sentinel: could not mark %s as read: %s", notif_id, e)
 
-        # Record as seen
         seen[notif_id] = datetime.now(timezone.utc).isoformat()
 
     _save_seen(seen)
 
-    summary = f"Sentinel: {new_count} new notification(s) pushed"
+    total = len(notifications)
+    unread_count = len(unread)
+    summary = (
+        f"Sentinel[heartbeat]: {total} notification(s) fetched, "
+        f"{unread_count} unread candidate(s), {new_count} new alert(s) pushed"
+    )
     if errors:
         summary += f" | {len(errors)} error(s): {errors[0]}"
     logger.info(summary)

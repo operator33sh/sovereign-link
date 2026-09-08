@@ -638,6 +638,9 @@ async def _post_init(app: Application) -> None:
     global _proactive_loop
     _proactive_loop = asyncio.get_event_loop()
     logger.info("ProactiveDispatcher: event loop registered at startup")
+    # Flush any notifications that were queued while the bot was offline
+    from proactive import proactive_dispatcher as _pd
+    _pd.notify()
     await app.bot.set_my_commands([
         BotCommand("start", "Check if the bot is online"),
         BotCommand("clear", "Clear the current session context"),
