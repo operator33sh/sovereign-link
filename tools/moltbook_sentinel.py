@@ -1,9 +1,10 @@
 """
 Moltbook Sentinel — background automation tool.
 
-Polls GET /api/v1/home every 15 minutes (via the AutomationEngine cron),
-checks for unread notifications, deduplicates, pushes high-priority alerts
-to the notification queue, and marks notifications as read on Moltbook.
+Polls GET /api/v1/notifications every 15 minutes (via the AutomationEngine cron),
+aggregates new notifications, enriches comment-type notifications with actual
+comment text via GET /api/v1/posts/{id}/comments, then pushes ONE consolidated
+Intelligence Report to the notification queue and marks all as read.
 
 Deduplication state: .agent_temp/moltbook_sentinel_seen.json
   { "seen": { "<notification_id>": "<ISO timestamp>" } }
@@ -21,9 +22,13 @@ _SENTINEL_SEEN_PATH = os.path.join(
     "..", ".agent_temp", "moltbook_sentinel_seen.json",
 )
 _SEEN_TTL_HOURS = 24  # evict seen IDs after this many hours
-_HOME_URL = "https://www.moltbook.com/api/v1/home"
 _NOTIFICATIONS_URL = "https://www.moltbook.com/api/v1/notifications"
-_READ_URL_TEMPLATE = "https://www.moltbook.com/api/v1/notifications/read-by-post/{id}"
+_COMMENTS_URL_TEMPLATE = "https://www.moltbook.com/api/v1/posts/{id}/comments"
+_READ_BY_POST_TEMPLATE = "https://www.moltbook.com/api/v1/notifications/read-by-post/{id}"
+_READ_ALL_URL = "https://www.moltbook.com/api/v1/notifications/read-all"
+
+# Comment notification type identifiers (case-insensitive match)
+_COMMENT_TYPES = frozenset({"comment", "reply", "mention"})
 
 
 # ─── Seen-ID store ────────────────────────────────────────────────────────────
@@ -68,11 +73,9 @@ def _get(url: str) -> tuple[int, dict | list | None]:
     """Perform a GET via http_request and return (status, parsed_json | None)."""
     from tools.http import http_request
     raw = http_request("GET", url)
-    # raw is "Status: 200\n\n{...}"
     try:
         status_line, _, body = raw.partition("\n\n")
         status = int(status_line.replace("Status:", "").strip())
-        # body may be a briefing string (if filter kicked in) or JSON
         try:
             return status, json.loads(body)
         except (json.JSONDecodeError, ValueError):
@@ -106,7 +109,7 @@ def _filter_unread(notifications: list[dict]) -> list[dict]:
         for n in notifications
     )
     if not has_read_flag:
-        return notifications  # dedup handles it
+        return notifications
     return [
         n for n in notifications
         if not n.get("read") and not n.get("is_read")
@@ -116,7 +119,7 @@ def _filter_unread(notifications: list[dict]) -> list[dict]:
 # ─── Heartbeat logging ─────────────────────────────────────────────────────────
 
 def _heartbeat_log(endpoint: str, status: int, data) -> None:
-    """Write a one-line heartbeat to the automation log path for observability."""
+    """Write a one-line heartbeat to .agent_temp for observability."""
     import json as _json
     try:
         log_path = os.path.join(
@@ -125,116 +128,15 @@ def _heartbeat_log(endpoint: str, status: int, data) -> None:
         )
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         ts = datetime.now(timezone.utc).isoformat()
-        if isinstance(data, (dict, list)):
-            snippet = _json.dumps(data)[:200]
-        else:
-            snippet = str(data)[:200] if data else "None"
-        line = f"{ts} | {endpoint} | status={status} | {snippet}\n"
+        snippet = (_json.dumps(data)[:200] if isinstance(data, (dict, list))
+                   else str(data)[:200] if data else "None")
         with open(log_path, "a", encoding="utf-8") as f:
-            f.write(line)
+            f.write(f"{ts} | {endpoint} | status={status} | {snippet}\n")
     except Exception:
         logger.debug("Sentinel: heartbeat log write failed (non-fatal)")
 
 
-# ─── Core sentinel logic ──────────────────────────────────────────────────────
-
-def run_moltbook_sentinel(_args: dict | None = None) -> str:
-    """
-    Main entry point called by AutomationEngine.
-
-    Strategy: skip /home entirely — go straight to /notifications and rely
-    on deduplication (seen-IDs) as the reliability layer. This avoids
-    fragile field-name guessing on the /home response.
-
-    Returns a short heartbeat string stored in automation_logs.json.
-    """
-    from notifications import notification_manager
-
-    # 1. Fetch /notifications directly — dedup handles "already seen" items
-    notif_status, notif_data = _get(_NOTIFICATIONS_URL)
-
-    # Heartbeat: always log what the API actually returned
-    _heartbeat_log("notifications", notif_status, notif_data)
-
-    if notif_status == 0 or notif_data is None:
-        return "Sentinel: /notifications request failed — skipping"
-    if notif_status == 429:
-        return "Sentinel: rate limited — skipping this cycle"
-    if notif_status >= 400:
-        return f"Sentinel: /notifications returned HTTP {notif_status} — skipping"
-
-    notifications = _extract_notifications(notif_data)
-    if not notifications:
-        return f"Sentinel[heartbeat]: /notifications returned 0 items (status={notif_status})"
-
-    # 2. Filter to only unread items where the API exposes a read flag;
-    #    if no read flag exists, treat ALL items as candidates — dedup prevents spam
-    unread = _filter_unread(notifications)
-
-    # 3. Load deduplication state
-    seen = _evict_old(_load_seen())
-    new_count = 0
-    errors = []
-
-    for notif in unread:
-        notif_id = str(
-            notif.get("id") or notif.get("notification_id") or notif.get("post_id") or ""
-        )
-        if not notif_id or notif_id in seen:
-            continue
-
-        author = _extract_author(notif)
-        preview = _extract_preview(notif)
-        # Classify priority: comments/mentions always high; rest also high per spec
-        content = f"Moltbook Signal: New notification from @{author} — '{preview}'"
-
-        try:
-            notification_manager.write(
-                content=content,
-                agent_id="moltbook_sentinel",
-                priority="high",
-                category="alert",
-            )
-            new_count += 1
-        except Exception as e:
-            errors.append(f"write failed for {notif_id}: {e}")
-            continue
-
-        # Mark as read on Moltbook (best-effort)
-        read_url = _READ_URL_TEMPLATE.format(id=notif_id)
-        try:
-            _post(read_url)
-        except Exception as e:
-            logger.warning("Sentinel: could not mark %s as read: %s", notif_id, e)
-
-        seen[notif_id] = datetime.now(timezone.utc).isoformat()
-
-    _save_seen(seen)
-
-    total = len(notifications)
-    unread_count = len(unread)
-    summary = (
-        f"Sentinel[heartbeat]: {total} notification(s) fetched, "
-        f"{unread_count} unread candidate(s), {new_count} new alert(s) pushed"
-    )
-    if errors:
-        summary += f" | {len(errors)} error(s): {errors[0]}"
-    logger.info(summary)
-    return summary
-
-
 # ─── Extraction helpers ───────────────────────────────────────────────────────
-
-def _extract_unread_from_briefing(text: str) -> int:
-    """Try to find a numeric unread count in a briefing string."""
-    import re
-    m = re.search(r"unread[_\s]?(?:notification[_\s]?)?count[\"']?\s*[:=]\s*(\d+)", text, re.I)
-    if m:
-        return int(m.group(1))
-    # If briefing lists items, assume each item is unread
-    items = re.findall(r"^- id=", text, re.MULTILINE)
-    return len(items)
-
 
 def _extract_notifications(data) -> list[dict]:
     """Pull the notification list out of various response shapes."""
@@ -244,7 +146,6 @@ def _extract_notifications(data) -> list[dict]:
         for key in ("notifications", "items", "data", "results"):
             if isinstance(data.get(key), list):
                 return [i for i in data[key] if isinstance(i, dict)]
-        # Briefing fallback: parse id lines
         raw = data.get("_raw", "")
         if "MOLTBOOK BRIEFING" in raw:
             import re
@@ -279,6 +180,197 @@ def _extract_preview(notif: dict) -> str:
     return "—"
 
 
+def _notif_type(notif: dict) -> str:
+    """Return the lowercase notification type string, or 'unknown'."""
+    return str(
+        notif.get("type") or notif.get("notification_type") or notif.get("kind") or "unknown"
+    ).lower()
+
+
+def _notif_id(notif: dict) -> str:
+    return str(
+        notif.get("id") or notif.get("notification_id") or ""
+    )
+
+
+def _post_id(notif: dict) -> str | None:
+    return (
+        notif.get("post_id")
+        or notif.get("post", {}).get("id") if isinstance(notif.get("post"), dict) else None
+        or None
+    )
+
+
+# ─── Enrichment ───────────────────────────────────────────────────────────────
+
+def _fetch_latest_comment(pid: str) -> tuple[str, str, str]:
+    """
+    Fetch comments for post `pid`.
+    Returns (author_name, comment_snippet, post_title).
+    Falls back to ("unknown", "—", pid) on any failure.
+    """
+    status, data = _get(_COMMENTS_URL_TEMPLATE.format(id=pid))
+    if status != 200 or data is None:
+        return "unknown", "—", pid
+
+    comments = []
+    if isinstance(data, list):
+        comments = [c for c in data if isinstance(c, dict)]
+    elif isinstance(data, dict):
+        for key in ("comments", "items", "data", "results"):
+            if isinstance(data.get(key), list):
+                comments = [c for c in data[key] if isinstance(c, dict)]
+                break
+
+    if not comments:
+        return "unknown", "—", pid
+
+    # Pick the most recent comment (last in list, or highest created_at)
+    latest = comments[-1]
+    author = _extract_author(latest)
+    snippet = _extract_preview(latest)
+    # Try to get post title from the response envelope or first comment's post field
+    post_title = ""
+    if isinstance(data, dict):
+        post_title = (
+            data.get("post_title") or data.get("title")
+            or (data.get("post", {}).get("title") if isinstance(data.get("post"), dict) else "")
+            or ""
+        )
+    if not post_title:
+        post_obj = latest.get("post") or {}
+        post_title = (
+            post_obj.get("title") if isinstance(post_obj, dict) else ""
+        ) or pid[:8]
+
+    return author, snippet, post_title
+
+
+# ─── Core sentinel logic ──────────────────────────────────────────────────────
+
+def run_moltbook_sentinel(_args: dict | None = None) -> str:
+    """
+    Main entry point called by AutomationEngine.
+
+    Workflow:
+      1. Fetch /notifications — skip items already in seen cache.
+      2. Group new items: comment/mention/reply types by post_id; rest as "other".
+      3. Enrich comment groups via GET /posts/{id}/comments.
+      4. Build ONE consolidated Intelligence Report and push it.
+      5. Call POST /notifications/read-all to clear unread state.
+      6. Update seen cache.
+    """
+    from notifications import notification_manager
+
+    # 1. Fetch
+    notif_status, notif_data = _get(_NOTIFICATIONS_URL)
+    _heartbeat_log("notifications", notif_status, notif_data)
+
+    if notif_status == 0 or notif_data is None:
+        return "Sentinel: /notifications request failed — skipping"
+    if notif_status == 429:
+        return "Sentinel: rate limited — skipping this cycle"
+    if notif_status >= 400:
+        return f"Sentinel: /notifications returned HTTP {notif_status} — skipping"
+
+    all_notifs = _extract_notifications(notif_data)
+    if not all_notifs:
+        return f"Sentinel[heartbeat]: /notifications returned 0 items (status={notif_status})"
+
+    unread = _filter_unread(all_notifs)
+
+    # 2. Dedup: keep only unseen
+    seen = _evict_old(_load_seen())
+    new_notifs = [n for n in unread if _notif_id(n) and _notif_id(n) not in seen]
+
+    if not new_notifs:
+        return (
+            f"Sentinel[heartbeat]: {len(all_notifs)} fetched, "
+            f"{len(unread)} unread, 0 new — nothing to push"
+        )
+
+    # 3. Group: comment-type by post_id, everything else as "other"
+    comment_groups: dict[str, list[dict]] = {}  # post_id → [notifs]
+    other_notifs: list[dict] = []
+
+    for notif in new_notifs:
+        ntype = _notif_type(notif)
+        pid = _post_id(notif)
+        if ntype in _COMMENT_TYPES and pid:
+            comment_groups.setdefault(pid, []).append(notif)
+        else:
+            other_notifs.append(notif)
+
+    # 4. Build report lines
+    report_lines: list[str] = []
+
+    for pid, group in comment_groups.items():
+        author, snippet, post_title = _fetch_latest_comment(pid)
+        count = len(group)
+        if count > 1:
+            line = f'💬 @{author} (+{count - 1} others): "{snippet}" — Post: _{post_title}_'
+        else:
+            line = f'💬 @{author}: "{snippet}" — Post: _{post_title}_'
+        report_lines.append(line)
+
+    for notif in other_notifs:
+        ntype = _notif_type(notif)
+        author = _extract_author(notif)
+        preview = _extract_preview(notif)
+
+        if ntype == "follow":
+            line = f"👤 @{author} is je gaan volgen"
+        elif ntype in ("like", "upvote", "heart"):
+            line = f"❤️ @{author} vond je post leuk: _{preview}_"
+        elif preview and preview != "—":
+            line = f"🔔 @{author} [{ntype}]: \"{preview}\""
+        else:
+            line = f"🔔 @{author} [{ntype}]"
+        report_lines.append(line)
+
+    # 5. Push ONE consolidated report
+    now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    header = f"📬 *Moltbook Intelligence Report* ({now_str}):\n"
+    report_body = "\n".join(f"- {l}" for l in report_lines)
+    full_report = header + report_body
+
+    try:
+        notification_manager.write(
+            content=full_report,
+            agent_id="moltbook_sentinel",
+            priority="high",
+            category="alert",
+        )
+    except Exception as e:
+        return f"Sentinel: notification_manager.write failed — {e}"
+
+    # 6. Mark all as read on Moltbook (try read-all first, fall back per-post)
+    read_all_status = _post(_READ_ALL_URL)
+    if read_all_status not in (200, 204):
+        # Fall back: mark each post group individually
+        for pid in comment_groups:
+            try:
+                _post(_READ_BY_POST_TEMPLATE.format(id=pid))
+            except Exception as e:
+                logger.warning("Sentinel: could not mark post %s as read: %s", pid, e)
+
+    # 7. Update seen cache
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for notif in new_notifs:
+        nid = _notif_id(notif)
+        if nid:
+            seen[nid] = now_iso
+    _save_seen(seen)
+
+    summary = (
+        f"Sentinel[ok]: {len(all_notifs)} fetched, {len(new_notifs)} new → "
+        f"1 report pushed ({len(comment_groups)} post group(s), "
+        f"{len(other_notifs)} other(s)) | read-all={read_all_status}"
+    )
+    logger.info(summary)
+    return summary
+
+
 # ─── Tool registration ────────────────────────────────────────────────────────
 
 DEFINITIONS = [
@@ -287,10 +379,10 @@ DEFINITIONS = [
         "function": {
             "name": "moltbook_sentinel",
             "description": (
-                "Run the Moltbook Sentinel: polls /home for unread notifications, "
-                "deduplicates, pushes high-priority alerts to the notification queue, "
-                "and marks notifications as read. Called automatically by the cron "
-                "automation every 15 minutes. Can also be triggered manually."
+                "Run the Moltbook Sentinel: polls /notifications for unread items, "
+                "enriches comment notifications with actual text via /posts/{id}/comments, "
+                "pushes ONE consolidated Intelligence Report to the notification queue, "
+                "then marks all as read. Called automatically every 15 minutes."
             ),
             "parameters": {
                 "type": "object",
