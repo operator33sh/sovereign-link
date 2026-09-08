@@ -27,8 +27,12 @@ _COMMENTS_URL_TEMPLATE = "https://www.moltbook.com/api/v1/posts/{id}/comments"
 _READ_BY_POST_TEMPLATE = "https://www.moltbook.com/api/v1/notifications/read-by-post/{id}"
 _READ_ALL_URL = "https://www.moltbook.com/api/v1/notifications/read-all"
 
-# Comment notification type identifiers (case-insensitive match)
-_COMMENT_TYPES = frozenset({"comment", "reply", "mention"})
+# Comment notification type identifiers (case-insensitive match on type field OR content text)
+_COMMENT_TYPES = frozenset({
+    "comment", "reply", "mention",
+    "comment_reply", "post_reply", "reply_to_comment",
+    "new_comment", "new_reply", "commented", "replied",
+})
 
 
 # ─── Seen-ID store ────────────────────────────────────────────────────────────
@@ -161,19 +165,28 @@ def _extract_notifications(data) -> list[dict]:
 
 
 def _extract_author(notif: dict) -> str:
-    author = notif.get("author") or notif.get("_author_raw") or ""
-    if isinstance(author, dict):
-        return (
-            author.get("username")
-            or author.get("handle")
-            or author.get("name")
-            or "unknown"
-        )
-    return str(author) or "unknown"
+    """Extract author name from whichever field Moltbook uses."""
+    for key in ("author", "actor", "from_user", "user", "sender", "notifier", "_author_raw"):
+        val = notif.get(key)
+        if not val:
+            continue
+        if isinstance(val, dict):
+            name = (
+                val.get("username")
+                or val.get("handle")
+                or val.get("name")
+                or val.get("display_name")
+                or ""
+            )
+            if name:
+                return str(name)
+        elif isinstance(val, str) and val.strip():
+            return val.strip()
+    return "unknown"
 
 
 def _extract_preview(notif: dict) -> str:
-    for key in ("content", "body", "title", "post_title", "preview", "summary"):
+    for key in ("content", "body", "title", "post_title", "preview", "summary", "message"):
         val = notif.get(key)
         if val and isinstance(val, str):
             return val[:80].strip()
@@ -181,10 +194,27 @@ def _extract_preview(notif: dict) -> str:
 
 
 def _notif_type(notif: dict) -> str:
-    """Return the lowercase notification type string, or 'unknown'."""
-    return str(
-        notif.get("type") or notif.get("notification_type") or notif.get("kind") or "unknown"
+    """Return a lowercase type string.
+
+    Checks explicit type fields first; falls back to content-text inference
+    so notifications with a null/missing type are still classified correctly.
+    """
+    t = str(
+        notif.get("type") or notif.get("notification_type") or notif.get("kind") or ""
+    ).lower().strip()
+    if t and t not in ("null", "none", "unknown"):
+        return t
+    # Infer from generic Moltbook description text
+    text = str(
+        notif.get("content") or notif.get("body") or notif.get("message") or notif.get("title") or ""
     ).lower()
+    if any(w in text for w in ("comment", "replied", "reply", "mentioned", "reacted")):
+        return "comment"
+    if "follow" in text:
+        return "follow"
+    if any(w in text for w in ("like", "liked", "heart", "upvote")):
+        return "like"
+    return "unknown"
 
 
 def _notif_id(notif: dict) -> str:
@@ -194,11 +224,22 @@ def _notif_id(notif: dict) -> str:
 
 
 def _post_id(notif: dict) -> str | None:
-    return (
-        notif.get("post_id")
-        or notif.get("post", {}).get("id") if isinstance(notif.get("post"), dict) else None
-        or None
-    )
+    """Find a post UUID in whichever field Moltbook uses this response cycle."""
+    for key in (
+        "post_id", "target_post_id", "parent_post_id", "original_post_id",
+        "reply_to_post_id", "object_id", "reference_id", "target_id",
+    ):
+        v = notif.get(key)
+        if v and str(v).strip():
+            return str(v).strip()
+    # Try nested objects
+    for obj_key in ("post", "target", "object", "subject"):
+        obj = notif.get(obj_key)
+        if isinstance(obj, dict):
+            v = obj.get("id") or obj.get("post_id") or obj.get("uuid")
+            if v:
+                return str(v).strip()
+    return None
 
 
 # ─── Enrichment ───────────────────────────────────────────────────────────────
@@ -289,6 +330,12 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
             f"{len(unread)} unread, 0 new — nothing to push"
         )
 
+    # Debug: log raw keys of first new notification so field names are visible
+    _heartbeat_log("first_new_notif_keys", 0, {
+        "keys": list(new_notifs[0].keys()),
+        "sample": {k: str(v)[:60] for k, v in new_notifs[0].items() if not isinstance(v, (list, dict))},
+    })
+
     # 3. Group: comment-type by post_id, everything else as "other"
     comment_groups: dict[str, list[dict]] = {}  # post_id → [notifs]
     other_notifs: list[dict] = []
@@ -298,6 +345,10 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
         pid = _post_id(notif)
         if ntype in _COMMENT_TYPES and pid:
             comment_groups.setdefault(pid, []).append(notif)
+        elif ntype in _COMMENT_TYPES and not pid:
+            # Comment type detected but no post_id found — still log it as other
+            # so at least the author shows up (better than dropping it entirely)
+            other_notifs.append(notif)
         else:
             other_notifs.append(notif)
 
