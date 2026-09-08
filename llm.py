@@ -398,7 +398,7 @@ def _run_tool_loop(messages: list, max_iter: int = 10, cancel_event: threading.E
 _client = httpx.Client(
     base_url=OLLAMA_BASE_URL,
     headers={"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {},
-    timeout=httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0),
+    timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
 )
 
 
