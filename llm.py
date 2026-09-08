@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 
 import httpx
@@ -330,7 +331,7 @@ def _strip_text_tool_call(text: str, call_start: int, call_end: int) -> str:
 _LOOP_OVERFLOW = object()
 
 
-def _run_tool_loop(messages: list, max_iter: int = 10):
+def _run_tool_loop(messages: list, max_iter: int = 10, cancel_event: threading.Event | None = None):
     """Execute the LLM tool-call loop, mutating *messages* in-place.
 
     Handles structured tool_calls and text-format fallback calls.
@@ -343,6 +344,9 @@ def _run_tool_loop(messages: list, max_iter: int = 10):
         _LOOP_OVERFLOW — sentinel when max iterations are exhausted
     """
     for _ in range(max_iter):
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("_run_tool_loop: cancelled by caller — stopping early")
+            return ""
         data = _chat(messages)
         choice = data["choices"][0]
         message = choice["message"]
@@ -394,7 +398,7 @@ def _run_tool_loop(messages: list, max_iter: int = 10):
 _client = httpx.Client(
     base_url=OLLAMA_BASE_URL,
     headers={"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {},
-    timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
+    timeout=httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0),
 )
 
 
@@ -650,7 +654,7 @@ def run_triggered() -> str:
     return result
 
 
-def run(user_message: str, msg_timestamp: "datetime | None" = None) -> str:
+def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event: threading.Event | None = None) -> str:
     global _personality_seeded
     is_first = not context.get_history()  # check before add_message
     context.add_message("user", user_message)
@@ -678,7 +682,7 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None) -> str:
 
     messages = [{"role": "system", "content": system_with_time}] + context.get_history()
 
-    result = _run_tool_loop(messages)
+    result = _run_tool_loop(messages, cancel_event=cancel_event)
     if result is _LOOP_OVERFLOW:
         return "Error: tool call loop exceeded maximum iterations"
     if not result:

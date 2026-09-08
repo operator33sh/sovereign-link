@@ -220,7 +220,7 @@ def http_request(method: str, url: str, headers: dict | None = None, body=None) 
         req.add_header(k, v)
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:
             status = resp.status
             response_body = resp.read().decode("utf-8", errors="replace")
             if is_moltbook:

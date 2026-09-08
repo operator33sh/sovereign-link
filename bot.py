@@ -4,6 +4,7 @@ import html
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 
 AUDIO_TMP_DIR = "/tmp/audio_transcription"
@@ -347,6 +348,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 pass
             await asyncio.sleep(4)
 
+    cancel_event = threading.Event()
     typing_task = asyncio.create_task(keep_typing())
 
     try:
@@ -381,10 +383,11 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         try:
             reply = await asyncio.wait_for(
-                asyncio.to_thread(llm.run, transcription, update.message.date),
+                asyncio.to_thread(llm.run, transcription, update.message.date, cancel_event),
                 timeout=LLM_TIMEOUT,
             )
         except asyncio.TimeoutError:
+            cancel_event.set()
             logger.error("LLM run() timed out na %.0fs voor audiobericht", LLM_TIMEOUT)
             reply = "Het antwoord duurde te lang. Probeer het opnieuw."
 
@@ -514,13 +517,15 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     chat_bridge.set_context_injector(_sleep_aware_context_injector)
     chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
+    cancel_event = threading.Event()
     typing_task = asyncio.create_task(keep_typing())
     try:
         reply = await asyncio.wait_for(
-            asyncio.to_thread(llm.run, user_text, update.message.date),
+            asyncio.to_thread(llm.run, user_text, update.message.date, cancel_event),
             timeout=LLM_TIMEOUT,
         )
     except asyncio.TimeoutError:
+        cancel_event.set()
         logger.error("LLM run() timed out na %.0fs voor bericht: %r", LLM_TIMEOUT, user_text[:100])
         reply = "Het antwoord duurde te lang. Probeer het opnieuw."
     except Exception as e:
