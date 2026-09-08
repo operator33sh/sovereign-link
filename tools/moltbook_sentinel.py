@@ -22,6 +22,7 @@ _SENTINEL_SEEN_PATH = os.path.join(
     "..", ".agent_temp", "moltbook_sentinel_seen.json",
 )
 _SEEN_TTL_HOURS = 24  # evict seen IDs after this many hours
+_HOME_URL = "https://www.moltbook.com/api/v1/home"
 _NOTIFICATIONS_URL = "https://www.moltbook.com/api/v1/notifications"
 _COMMENTS_URL_TEMPLATE = "https://www.moltbook.com/api/v1/posts/{id}/comments"
 _READ_BY_POST_TEMPLATE = "https://www.moltbook.com/api/v1/notifications/read-by-post/{id}"
@@ -193,6 +194,21 @@ def _extract_preview(notif: dict) -> str:
     return "—"
 
 
+def _extract_author_from_content(text: str) -> str:
+    """Extract username from patterns like 'plotracanvas started following you'.
+
+    Returns empty string on no-match so callers can chain: result or fallback.
+    """
+    import re
+    m = re.match(
+        r'^([\w][\w._-]*)\s+(?:started following|is now following|followed you)',
+        text, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    return ""
+
+
 def _notif_type(notif: dict) -> str:
     """Return a lowercase type string.
 
@@ -294,92 +310,121 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
     Main entry point called by AutomationEngine.
 
     Workflow:
-      1. Fetch /notifications — skip items already in seen cache.
-      2. Group new items: comment/mention/reply types by post_id; rest as "other".
-      3. Enrich comment groups via GET /posts/{id}/comments.
-      4. Build ONE consolidated Intelligence Report and push it.
-      5. Call POST /notifications/read-all to clear unread state.
-      6. Update seen cache.
+      1. Fetch /home — rich activity data with real commenter names and post titles.
+      2. Fetch /notifications — for follows and other non-comment events.
+      3. Dedup both sources against seen cache.
+      4. Enrich comment activity via GET /posts/{id}/comments for actual comment text.
+      5. Build ONE consolidated Intelligence Report and push it.
+      6. Call POST /notifications/read-all to clear unread state.
+      7. Update seen cache.
     """
     from notifications import notification_manager
 
-    # 1. Fetch
+    seen = _evict_old(_load_seen())
+    report_lines: list[str] = []
+    seen_post_ids: list[str] = []   # home activity IDs to mark in cache
+    seen_notif_ids: list[str] = []  # notification IDs to mark in cache
+
+    # ── 1. Fetch /home ────────────────────────────────────────────────────────
+    home_status, home_data = _get(_HOME_URL)
+    _heartbeat_log("home", home_status, home_data)
+
+    if home_status == 429:
+        return "Sentinel: rate limited on /home — skipping this cycle"
+
+    home_activities: list[dict] = []
+    if home_status == 200 and isinstance(home_data, dict):
+        home_activities = [
+            a for a in home_data.get("activity_on_your_posts", [])
+            if isinstance(a, dict) and a.get("post_id")
+        ]
+
+    # ── 2. Fetch /notifications ───────────────────────────────────────────────
     notif_status, notif_data = _get(_NOTIFICATIONS_URL)
     _heartbeat_log("notifications", notif_status, notif_data)
 
-    if notif_status == 0 or notif_data is None:
-        return "Sentinel: /notifications request failed — skipping"
-    if notif_status == 429:
-        return "Sentinel: rate limited — skipping this cycle"
-    if notif_status >= 400:
-        return f"Sentinel: /notifications returned HTTP {notif_status} — skipping"
+    all_notifs: list[dict] = []
+    if notif_status == 200 and notif_data is not None:
+        all_notifs = _extract_notifications(notif_data)
 
-    all_notifs = _extract_notifications(notif_data)
-    if not all_notifs:
-        return f"Sentinel[heartbeat]: /notifications returned 0 items (status={notif_status})"
+    # ── 3. Process new home activities (comments / replies) ───────────────────
+    new_activities = [
+        a for a in home_activities
+        if ("home_" + a["post_id"]) not in seen
+    ]
 
-    unread = _filter_unread(all_notifs)
+    for activity in new_activities:
+        pid = activity["post_id"]
+        post_title = activity.get("post_title") or pid[:8]
+        commenters = activity.get("latest_commenters") or []
+        author = commenters[0] if commenters else "unknown"
+        count = activity.get("new_notification_count", 1)
 
-    # 2. Dedup: keep only unseen
-    seen = _evict_old(_load_seen())
-    new_notifs = [n for n in unread if _notif_id(n) and _notif_id(n) not in seen]
+        # Fetch actual comment text
+        _, snippet, _ = _fetch_latest_comment(pid)
 
-    if not new_notifs:
-        return (
-            f"Sentinel[heartbeat]: {len(all_notifs)} fetched, "
-            f"{len(unread)} unread, 0 new — nothing to push"
-        )
-
-    # Debug: log raw keys of first new notification so field names are visible
-    _heartbeat_log("first_new_notif_keys", 0, {
-        "keys": list(new_notifs[0].keys()),
-        "sample": {k: str(v)[:60] for k, v in new_notifs[0].items() if not isinstance(v, (list, dict))},
-    })
-
-    # 3. Group: comment-type by post_id, everything else as "other"
-    comment_groups: dict[str, list[dict]] = {}  # post_id → [notifs]
-    other_notifs: list[dict] = []
-
-    for notif in new_notifs:
-        ntype = _notif_type(notif)
-        pid = _post_id(notif)
-        if ntype in _COMMENT_TYPES and pid:
-            comment_groups.setdefault(pid, []).append(notif)
-        elif ntype in _COMMENT_TYPES and not pid:
-            # Comment type detected but no post_id found — still log it as other
-            # so at least the author shows up (better than dropping it entirely)
-            other_notifs.append(notif)
-        else:
-            other_notifs.append(notif)
-
-    # 4. Build report lines
-    report_lines: list[str] = []
-
-    for pid, group in comment_groups.items():
-        author, snippet, post_title = _fetch_latest_comment(pid)
-        count = len(group)
-        if count > 1:
-            line = f'💬 @{author} (+{count - 1} others): "{snippet}" — Post: _{post_title}_'
+        extra = (len(commenters) - 1) if len(commenters) > 1 else (count - 1)
+        if extra > 0:
+            line = f'💬 @{author} (+{extra} others): "{snippet}" — Post: _{post_title}_'
         else:
             line = f'💬 @{author}: "{snippet}" — Post: _{post_title}_'
         report_lines.append(line)
+        seen_post_ids.append(pid)
 
-    for notif in other_notifs:
+    # ── 4. Process /notifications for follows and other non-comment events ─────
+    unread_notifs = _filter_unread(all_notifs) if all_notifs else []
+    new_notifs = [
+        n for n in unread_notifs
+        if _notif_id(n) and _notif_id(n) not in seen
+    ]
+
+    if new_notifs:
+        _heartbeat_log("first_new_notif_keys", 0, {
+            "keys": list(new_notifs[0].keys()),
+            "sample": {k: str(v)[:60] for k, v in new_notifs[0].items()
+                       if not isinstance(v, (list, dict))},
+        })
+
+    for notif in new_notifs:
         ntype = _notif_type(notif)
-        author = _extract_author(notif)
-        preview = _extract_preview(notif)
+        content = str(notif.get("content") or notif.get("body") or notif.get("message") or "")
 
         if ntype == "follow":
+            author = _extract_author_from_content(content) or _extract_author(notif)
             line = f"👤 @{author} is je gaan volgen"
+        elif ntype in _COMMENT_TYPES:
+            # Comment notifications without a post_id — home already covered the
+            # ones with a post_id, so skip duplicates; show the rest as fallback.
+            pid = _post_id(notif)
+            if pid and ("home_" + pid) in {("home_" + p) for p in seen_post_ids}:
+                seen_notif_ids.append(_notif_id(notif))
+                continue  # already reported via home
+            author = _extract_author(notif)
+            preview = _extract_preview(notif)
+            post_title = pid[:8] if pid else "—"
+            line = f'💬 @{author}: "{preview}" — Post: _{post_title}_'
         elif ntype in ("like", "upvote", "heart"):
+            author = _extract_author(notif)
+            preview = _extract_preview(notif)
             line = f"❤️ @{author} vond je post leuk: _{preview}_"
-        elif preview and preview != "—":
-            line = f"🔔 @{author} [{ntype}]: \"{preview}\""
         else:
-            line = f"🔔 @{author} [{ntype}]"
+            author = _extract_author(notif)
+            preview = _extract_preview(notif)
+            if preview and preview != "—":
+                line = f"🔔 @{author} [{ntype}]: \"{preview}\""
+            else:
+                line = f"🔔 @{author} [{ntype}]"
         report_lines.append(line)
+        seen_notif_ids.append(_notif_id(notif))
 
-    # 5. Push ONE consolidated report
+    # ── 5. Nothing new? ───────────────────────────────────────────────────────
+    if not report_lines:
+        return (
+            f"Sentinel[heartbeat]: {len(home_activities)} home activities, "
+            f"{len(all_notifs)} notifications — 0 new — nothing to push"
+        )
+
+    # ── 6. Push ONE consolidated report ──────────────────────────────────────
     now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
     header = f"📬 *Moltbook Intelligence Report* ({now_str}):\n"
     report_body = "\n".join(f"- {l}" for l in report_lines)
@@ -395,28 +440,28 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
     except Exception as e:
         return f"Sentinel: notification_manager.write failed — {e}"
 
-    # 6. Mark all as read on Moltbook (try read-all first, fall back per-post)
+    # ── 7. Mark all as read on Moltbook ──────────────────────────────────────
     read_all_status = _post(_READ_ALL_URL)
     if read_all_status not in (200, 204):
-        # Fall back: mark each post group individually
-        for pid in comment_groups:
+        for pid in seen_post_ids:
             try:
                 _post(_READ_BY_POST_TEMPLATE.format(id=pid))
             except Exception as e:
                 logger.warning("Sentinel: could not mark post %s as read: %s", pid, e)
 
-    # 7. Update seen cache
+    # ── 8. Update seen cache ──────────────────────────────────────────────────
     now_iso = datetime.now(timezone.utc).isoformat()
-    for notif in new_notifs:
-        nid = _notif_id(notif)
+    for pid in seen_post_ids:
+        seen["home_" + pid] = now_iso
+    for nid in seen_notif_ids:
         if nid:
             seen[nid] = now_iso
     _save_seen(seen)
 
     summary = (
-        f"Sentinel[ok]: {len(all_notifs)} fetched, {len(new_notifs)} new → "
-        f"1 report pushed ({len(comment_groups)} post group(s), "
-        f"{len(other_notifs)} other(s)) | read-all={read_all_status}"
+        f"Sentinel[ok]: {len(new_activities)} home activities + "
+        f"{len(seen_notif_ids)} notifications → 1 report pushed | "
+        f"read-all={read_all_status}"
     )
     logger.info(summary)
     return summary
