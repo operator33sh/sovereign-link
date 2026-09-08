@@ -347,7 +347,7 @@ def _run_tool_loop(messages: list, max_iter: int = 10, cancel_event: threading.E
         if cancel_event is not None and cancel_event.is_set():
             logger.info("_run_tool_loop: cancelled by caller — stopping early")
             return ""
-        data = _chat(messages)
+        data = _chat(messages, cancel_event=cancel_event)
         choice = data["choices"][0]
         message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")
@@ -429,7 +429,7 @@ def _trim_messages(messages: list) -> list:
     return trimmed
 
 
-def _chat(messages: list) -> dict:
+def _chat(messages: list, cancel_event: threading.Event | None = None) -> dict:
     payload = {
         "model": MODEL,
         "messages": _trim_messages(messages),
@@ -438,6 +438,9 @@ def _chat(messages: list) -> dict:
     }
     last_exc = None
     for attempt in range(3):
+        # Abort before starting (or retrying) if caller timed out
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("LLM request cancelled — user-facing timeout fired")
         try:
             response = _client.post("/v1/chat/completions", json=payload)
             if response.status_code >= 400:
