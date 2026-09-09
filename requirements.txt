@@ -6,3 +6,4 @@ watchdog
 faster-whisper
 playwright
 croniter
+mcp
