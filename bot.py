@@ -53,6 +53,10 @@ SESSION_DRAFT_PATH = os.path.join(
 # even when no active handler is running.
 _proactive_loop: "asyncio.AbstractEventLoop | None" = None
 
+# Active LLM request — set during handle_message so /cancel can abort it.
+_active_cancel_event: "threading.Event | None" = None
+_active_llm_task: "asyncio.Task | None" = None
+
 
 def _save_session_draft() -> None:
     """Write raw conversation transcript to system_memory as a crash-safe draft.
@@ -91,6 +95,22 @@ def _strip_timestamps(text: str) -> str:
 
 def _is_authorized(update: Update) -> bool:
     return update.effective_user.id == ALLOWED_USER_ID
+
+
+async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+    cancelled = False
+    if _active_cancel_event is not None:
+        _active_cancel_event.set()
+        cancelled = True
+    if _active_llm_task is not None and not _active_llm_task.done():
+        _active_llm_task.cancel()
+        cancelled = True
+    if cancelled:
+        await update.message.reply_text("⛔ Gestopt.")
+    else:
+        await update.message.reply_text("Niets actief om te annuleren.")
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -517,21 +537,29 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     chat_bridge.set_context_injector(_sleep_aware_context_injector)
     chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
 
+    global _active_cancel_event, _active_llm_task
     cancel_event = threading.Event()
+    _active_cancel_event = cancel_event
     typing_task = asyncio.create_task(keep_typing())
+    llm_task = asyncio.ensure_future(
+        asyncio.to_thread(llm.run, user_text, update.message.date, cancel_event)
+    )
+    _active_llm_task = llm_task
     try:
-        reply = await asyncio.wait_for(
-            asyncio.to_thread(llm.run, user_text, update.message.date, cancel_event),
-            timeout=LLM_TIMEOUT,
-        )
+        reply = await asyncio.wait_for(asyncio.shield(llm_task), timeout=LLM_TIMEOUT)
     except asyncio.TimeoutError:
         cancel_event.set()
+        llm_task.cancel()
         logger.error("LLM run() timed out na %.0fs voor bericht: %r", LLM_TIMEOUT, user_text[:100])
         reply = "Het antwoord duurde te lang. Probeer het opnieuw."
+    except asyncio.CancelledError:
+        reply = "⛔ Gestopt."
     except Exception as e:
         logger.exception("LLM error")
         reply = f"Error: {e}"
     finally:
+        _active_cancel_event = None
+        _active_llm_task = None
         typing_task.cancel()
 
     stripped = _strip_timestamps(reply)
@@ -648,6 +676,7 @@ async def _post_init(app: Application) -> None:
     _pd.notify()
     await app.bot.set_my_commands([
         BotCommand("start", "Check if the bot is online"),
+        BotCommand("cancel", "Annuleer de lopende bewerking"),
         BotCommand("clear", "Clear the current session context"),
         BotCommand("vault", "Save last 5 exchanges as a vault note"),
         BotCommand("memory", "Extract and save sovereign memory log from conversation"),
@@ -716,6 +745,7 @@ def build_app() -> Application:
     notification_manager._on_write = proactive_dispatcher.notify
     proactive_dispatcher.start()
 
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("vault", cmd_vault))
