@@ -182,6 +182,44 @@ def http_request(method: str, url: str, headers: dict | None = None, body=None) 
                 _moltbook_debug_log(f"UUID VALIDATION BLOCKED: {url}\nREASON: '{candidate}' is not a valid UUID")
                 return msg
 
+    # Fix 5: intercept GET /posts/{post_id}/comments/{comment_id} — this endpoint does not exist.
+    # Auto-rewrite to GET /posts/{post_id}/comments (listing) and filter by comment_id.
+    if is_moltbook and method == "GET":
+        _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        m = re.search(rf"/posts/({_UUID})/comments/({_UUID})", parsed.path)
+        if m:
+            post_id, comment_id = m.group(1), m.group(2)
+            listing_url = f"{parsed.scheme}://{parsed.netloc}/api/v1/posts/{post_id}/comments?sort=new&limit=50"
+            _moltbook_debug_log(
+                f"SINGLE-COMMENT REWRITE: {url}\n"
+                f"→ listing fetch: {listing_url} (filter comment_id={comment_id})"
+            )
+            req2 = urllib.request.Request(listing_url, method="GET")
+            for k, v in (headers or {}).items():
+                req2.add_header(k, v)
+            try:
+                with urllib.request.urlopen(req2, timeout=15) as resp2:
+                    listing_body = resp2.read().decode("utf-8", errors="replace")
+                    listing_data = json.loads(listing_body)
+                    comments = listing_data if isinstance(listing_data, list) else listing_data.get("comments", [])
+                    match = next((c for c in comments if isinstance(c, dict) and c.get("id") == comment_id), None)
+                    if match:
+                        _moltbook_debug_log(f"SINGLE-COMMENT FOUND: id={comment_id}")
+                        return f"Status: 200\n\n{json.dumps(match, ensure_ascii=False)}"
+                    _moltbook_debug_log(f"SINGLE-COMMENT NOT IN LISTING: id={comment_id} (checked {len(comments)} comments)")
+                    return (
+                        f"Status: 200\n\n"
+                        f"{{\"_note\": \"Comment {comment_id} not found in latest 50 comments for post {post_id}. "
+                        f"It may have been deleted or is older than the listing window.\"}}"
+                    )
+            except urllib.error.HTTPError as e2:
+                body2 = e2.read().decode("utf-8", errors="replace")[:500]
+                _moltbook_debug_log(f"SINGLE-COMMENT LISTING ERROR: {e2.code} {body2}")
+                return f"HTTP Error {e2.code}: {e2.reason}\n\n{body2}"
+            except Exception as e2:
+                _moltbook_debug_log(f"SINGLE-COMMENT EXCEPTION: {e2}")
+                return f"Error: {e2}"
+
     data: bytes | None = None
     if body is not None:
         if isinstance(body, (dict, list)):
