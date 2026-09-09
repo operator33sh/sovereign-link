@@ -130,19 +130,20 @@ def _post(url: str) -> int:
 def _filter_unread(notifications: list[dict]) -> list[dict]:
     """Return only unread notifications.
 
-    If the API exposes an explicit 'read' or 'is_read' flag, respect it.
+    If the API exposes an explicit read flag, respect it.
+    Checks both snake_case (read, is_read) and camelCase (isRead) variants.
     If no such flag exists on any item, treat ALL items as candidates — the
     seen-IDs dedup layer prevents duplicate pushes.
     """
     has_read_flag = any(
-        "read" in n or "is_read" in n
+        "read" in n or "is_read" in n or "isRead" in n
         for n in notifications
     )
     if not has_read_flag:
         return notifications
     return [
         n for n in notifications
-        if not n.get("read") and not n.get("is_read")
+        if not n.get("read") and not n.get("is_read") and not n.get("isRead")
     ]
 
 
@@ -269,6 +270,7 @@ def _post_id(notif: dict) -> str | None:
     for key in (
         "post_id", "target_post_id", "parent_post_id", "original_post_id",
         "reply_to_post_id", "object_id", "reference_id", "target_id",
+        "relatedPostId",  # Moltbook v1 camelCase field
     ):
         v = notif.get(key)
         if v and str(v).strip():
