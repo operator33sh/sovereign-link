@@ -701,11 +701,16 @@ def build_app() -> Application:
         chat_id = user_status.get_chat_id()
         if loop is None or chat_id is None:
             logger.warning("ProactiveDispatcher: no loop/chat_id yet — message queued for next interaction")
-            return
-        asyncio.run_coroutine_threadsafe(
+            raise RuntimeError("no loop or chat_id — delivery deferred")
+        future = asyncio.run_coroutine_threadsafe(
             app.bot.send_message(chat_id, text[:4096], parse_mode="Markdown"),
             loop,
         )
+        try:
+            future.result(timeout=30)
+        except Exception as exc:
+            logger.error("ProactiveDispatcher: Telegram send failed — %s", exc)
+            raise
 
     proactive_dispatcher.set_send_fn(_proactive_send)
     notification_manager._on_write = proactive_dispatcher.notify

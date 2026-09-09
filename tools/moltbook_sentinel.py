@@ -435,11 +435,16 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
         # Fetch actual comment text
         _, snippet, _ = _fetch_latest_comment(pid)
 
+        # Escape Telegram Markdown special chars in user-generated strings
+        # so a post title like "A_B" doesn't break italic parsing → 400 → silent drop.
+        def _esc(s: str) -> str:
+            return s.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+
         extra = (len(commenters) - 1) if len(commenters) > 1 else (count - 1)
         if extra > 0:
-            line = f'💬 @{author} (+{extra} others): "{snippet}" — Post: _{post_title}_'
+            line = f'💬 @{author} (+{extra} others): "{_esc(snippet)}" — Post: _{_esc(post_title)}_'
         else:
-            line = f'💬 @{author}: "{snippet}" — Post: _{post_title}_'
+            line = f'💬 @{author}: "{_esc(snippet)}" — Post: _{_esc(post_title)}_'
         report_lines.append(line)
         seen_post_ids.append(pid)
 
