@@ -372,7 +372,15 @@ DEFINITIONS = [
                 "- SUMMARIZE, DON'T ECHO: never paste raw API JSON into your reply. Always translate "
                 "the response into a concise natural-language summary before presenting it to the user.\n"
                 "- LARGE RESPONSE PROTOCOL: if a response exceeds 2000 characters, extract only the "
-                "IDs and key fields you need, then discard the rest. Do not reason over the full payload."
+                "IDs and key fields you need, then discard the rest. Do not reason over the full payload.\n\n"
+                "STRICT NOTIFICATION PROTOCOL (Zero-Noise Policy):\n"
+                "1. The Number is Law: use unread_notification_count from GET /api/v1/home as the absolute "
+                "source of truth for how many notifications exist. Never invent or inflate this count.\n"
+                "2. Strict 1:1 Mapping: if unread_notification_count=0 → reply 'Geen ongelezen notificaties.' "
+                "and stop. If unread_notification_count=N → report exactly N notifications, no more, no less.\n"
+                "3. Anti-Noise Filter: DO NOT report 'Activity on your posts' (comments, likes, views) as "
+                "notifications unless those activities are explicitly counted in unread_notification_count.\n"
+                "4. Output Format: '[Aantal] ongelezen notificatie(s): [Korte samenvatting]'"
             ),
             "parameters": {
                 "type": "object",
