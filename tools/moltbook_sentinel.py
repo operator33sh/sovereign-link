@@ -403,7 +403,9 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
         ]
 
     # ── 2. Fetch /notifications ───────────────────────────────────────────────
-    notif_status, notif_data = _get(_NOTIFICATIONS_URL)
+    # Use _get_json (direct urllib) to bypass the http_request BRIEFING filter —
+    # the BRIEFING strips author and post_id, leaving only generic preview text.
+    notif_status, notif_data = _get_json(_NOTIFICATIONS_URL + "?limit=50")
     _heartbeat_log("notifications", notif_status, notif_data)
 
     all_notifs: list[dict] = []
@@ -470,16 +472,24 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
             author = _extract_author_from_content(content) or _extract_author(notif)
             line = f"👤 @{author} is je gaan volgen"
         elif ntype in _COMMENT_TYPES:
-            # Comment notifications without a post_id — home already covered the
-            # ones with a post_id, so skip duplicates; show the rest as fallback.
             pid = _post_id(notif)
             if pid and pid in seen_post_ids:
                 seen_notif_ids.append(_notif_id(notif))
                 continue  # already reported via home
             author = _extract_author(notif)
-            preview = _extract_preview(notif)
-            post_title = pid[:8] if pid else "—"
-            line = f'💬 @{author}: "{preview}" — Post: _{post_title}_'
+            if pid:
+                # Enrich: fetch actual comment text instead of showing generic "Someone replied"
+                enrich_author, snippet, post_title = _fetch_latest_comment(pid)
+                if author in ("unknown", ""):
+                    author = enrich_author
+            else:
+                snippet = _extract_preview(notif)
+                post_title = "—"
+
+            def _esc(s: str) -> str:
+                return s.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+
+            line = f'💬 @{author}: "{_esc(snippet)}" — Post: _{_esc(post_title)}_'
         elif ntype in ("like", "upvote", "heart"):
             author = _extract_author(notif)
             preview = _extract_preview(notif)
