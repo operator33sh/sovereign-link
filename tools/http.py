@@ -108,6 +108,15 @@ def _filter_moltbook_response(raw: str, url: str) -> str:
     if len(filtered) <= _MB_BRIEFING_CAP:
         return filtered
 
+    # Comments are primary requested content — never reduce to a briefing.
+    # Return stripped JSON directly (the outer http_request caps at 8000 chars anyway).
+    if list_key == "comments":
+        _moltbook_debug_log(
+            f"PAYLOAD FILTER: comments response kept as JSON (no briefing)\n"
+            f"original={len(raw)}chars filtered={len(filtered)}chars"
+        )
+        return filtered
+
     # Still large — emit a compact ID briefing so the agent can request specifics
     id_lines = []
     for item in stripped:
