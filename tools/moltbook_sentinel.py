@@ -24,7 +24,7 @@ _SENTINEL_SEEN_PATH = os.path.join(
 _SEEN_TTL_HOURS = 24  # evict seen IDs after this many hours
 _HOME_URL = "https://www.moltbook.com/api/v1/home"
 _NOTIFICATIONS_URL = "https://www.moltbook.com/api/v1/notifications"
-_COMMENTS_URL_TEMPLATE = "https://www.moltbook.com/api/v1/posts/{id}/comments"
+_COMMENTS_URL_TEMPLATE = "https://www.moltbook.com/api/v1/posts/{id}/comments?sort=new&limit=1"
 _READ_BY_POST_TEMPLATE = "https://www.moltbook.com/api/v1/notifications/read-by-post/{id}"
 _READ_ALL_URL = "https://www.moltbook.com/api/v1/notifications/read-all"
 
@@ -280,7 +280,7 @@ def _fetch_latest_comment(pid: str) -> tuple[str, str, str]:
                 break
 
     if not comments:
-        return "unknown", "—", pid
+        return "unknown", "Comment deleted", pid
 
     # Pick the most recent comment (last in list, or highest created_at)
     latest = comments[-1]
@@ -389,7 +389,11 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
         if ("home_" + a["post_id"]) not in seen
     ]
 
-    for activity in new_activities:
+    for i, activity in enumerate(new_activities):
+        if i > 0:
+            import time
+            time.sleep(0.3)  # avoid hammering the API when batch is large
+
         pid = activity["post_id"]
         post_title = activity.get("post_title") or pid[:8]
         commenters = activity.get("latest_commenters") or []
