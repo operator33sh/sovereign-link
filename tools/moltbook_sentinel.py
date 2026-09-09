@@ -89,6 +89,31 @@ def _get(url: str) -> tuple[int, dict | list | None]:
         return 0, None
 
 
+def _get_json(url: str) -> tuple[int, dict | list | None]:
+    """Fetch a URL directly via urllib, bypassing the http_request payload filter.
+
+    Used for /home where the full JSON is needed and the filter's 3 500-char
+    truncation would break the response before we can read activity_on_your_posts.
+    """
+    import urllib.request
+    import urllib.error
+    from tools.http import _get_moltbook_api_key
+
+    api_key = _get_moltbook_api_key()
+    if not api_key:
+        return 0, None
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            return resp.status, json.loads(body)
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except Exception:
+        return 0, None
+
+
 def _post(url: str) -> int:
     """Perform a POST with empty body; return HTTP status."""
     from tools.http import http_request
@@ -362,7 +387,9 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
     seen_notif_ids: list[str] = []  # notification IDs to mark in cache
 
     # ── 1. Fetch /home ────────────────────────────────────────────────────────
-    home_status, home_data = _get(_HOME_URL)
+    # Use _get_json (direct urllib) to bypass the http_request payload filter —
+    # the 3 500-char truncation corrupts the JSON and hides activity_on_your_posts.
+    home_status, home_data = _get_json(_HOME_URL)
     _heartbeat_log("home", home_status, home_data)
 
     if home_status == 429:
