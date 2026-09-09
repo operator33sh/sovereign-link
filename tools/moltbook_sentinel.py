@@ -411,9 +411,14 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
         all_notifs = _extract_notifications(notif_data)
 
     # ── 3. Process new home activities (comments / replies) ───────────────────
+    # Key includes latest_at so a new comment on the same post is not suppressed
+    # by the 24-hour TTL entry from the previous notification on that post.
+    def _home_key(a: dict) -> str:
+        return f"home_{a['post_id']}_{a.get('latest_at', '')}"
+
     new_activities = [
         a for a in home_activities
-        if ("home_" + a["post_id"]) not in seen
+        if _home_key(a) not in seen
     ]
 
     for i, activity in enumerate(new_activities):
@@ -463,7 +468,7 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
             # Comment notifications without a post_id — home already covered the
             # ones with a post_id, so skip duplicates; show the rest as fallback.
             pid = _post_id(notif)
-            if pid and ("home_" + pid) in {("home_" + p) for p in seen_post_ids}:
+            if pid and pid in seen_post_ids:
                 seen_notif_ids.append(_notif_id(notif))
                 continue  # already reported via home
             author = _extract_author(notif)
@@ -518,8 +523,8 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
     # unread means the agent can still look up the relevant posts via /home when
     # the user asks a follow-up question after receiving the Telegram alert.
     now_iso = datetime.now(timezone.utc).isoformat()
-    for pid in seen_post_ids:
-        seen["home_" + pid] = now_iso
+    for pid, key in zip(seen_post_ids, [_home_key(a) for a in new_activities]):
+        seen[key] = now_iso
     for nid in seen_notif_ids:
         if nid:
             seen[nid] = now_iso
