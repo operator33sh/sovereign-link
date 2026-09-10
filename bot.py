@@ -734,10 +734,14 @@ def build_app() -> Application:
         if loop is None or chat_id is None:
             logger.warning("ProactiveDispatcher: no loop/chat_id yet — message queued for next interaction")
             raise RuntimeError("no loop or chat_id — delivery deferred")
-        future = asyncio.run_coroutine_threadsafe(
-            app.bot.send_message(chat_id, text[:4096], parse_mode="Markdown"),
-            loop,
-        )
+        async def _send():
+            try:
+                await app.bot.send_message(chat_id, text[:4096], parse_mode="Markdown")
+            except Exception:
+                # Fall back to plain text if Markdown parsing fails
+                await app.bot.send_message(chat_id, text[:4096])
+
+        future = asyncio.run_coroutine_threadsafe(_send(), loop)
         try:
             future.result(timeout=30)
         except Exception as exc:
