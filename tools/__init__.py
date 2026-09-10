@@ -36,11 +36,12 @@ from tools.resonance_tools import DEFINITIONS as _rd, HANDLERS as _rh
 from tools.moltbook_sentinel import DEFINITIONS as _msd, HANDLERS as _msh
 from tools.health import DEFINITIONS as _hld, HANDLERS as _hlh
 from tools.gmail import DEFINITIONS as _gmd, HANDLERS as _gmh
+from tools.calendar import DEFINITIONS as _cld, HANDLERS as _clh
 
-TOOL_DEFINITIONS: list[dict] = _vd + _hd + _sd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd
+TOOL_DEFINITIONS: list[dict] = _vd + _hd + _sd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld
 
 TOOL_HANDLERS: dict[str, callable] = {
-    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh,
+    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh,
 }
 
 # Sub-agents do not get write_vault — they must use write_temp → commit_to_vault
