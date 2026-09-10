@@ -7,6 +7,9 @@ import re
 import threading
 from datetime import datetime
 
+from dotenv import load_dotenv
+load_dotenv()
+
 AUDIO_TMP_DIR = "/tmp/audio_transcription"
 
 from telegram import Update, BotCommand

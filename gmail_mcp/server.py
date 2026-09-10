@@ -105,7 +105,8 @@ def list_messages(query: str = "", max_results: int = 10) -> str:
 
     messages = resp.get("messages", [])
     if not messages:
-        return f"Geen berichten gevonden{f\" voor '{query}'\" if query else ''}."
+        suffix = f" voor '{query}'" if query else ""
+        return f"Geen berichten gevonden{suffix}."
 
     lines = []
     for msg in messages:
