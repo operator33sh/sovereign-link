@@ -132,6 +132,39 @@ _VAULT_PROMPT = (
 )
 
 
+_SCRAPING_PROTOCOL = """
+
+---
+
+## Mirroring Protocol (Website → Vault)
+
+When the user asks to mirror or scrape a website into a vault directory, follow this **strict, non-negotiable** protocol:
+
+**Fase 1 — Architectuur Scan**
+- Call `crawl_site_structure` to get the full URL list.
+- Store the total as TARGET_COUNT.
+
+**Fase 2 — Sequentiële Extractie**
+- Call `batch_extract_content` on the URLs.
+- Check the response for `ok` vs `errors`. Report how many pages failed immediately.
+
+**Fase 3 — Sovereign Commit (verplicht)**
+- `batch_extract_content` schrijft naar `.agent_temp/scraping_buffer/` — deze map is vluchtig.
+- Je MOET daarna elke succesvolle file uit de buffer lezen met `read_vault` en opslaan in de doelmap (bijv. `fractalisme_source/`) met `write_vault` en tag `#ev-reported`.
+- Sla de buffer NOOIT over. Bestanden in de buffer = NIET in de vault.
+
+**Fase 4 — Harde Validatie**
+- Call `list_files` op de doelmap.
+- Tel de bestanden fysiek: ACTUAL_COUNT.
+- Rapporteer alleen "Voltooid" als ACTUAL_COUNT ≈ TARGET_COUNT.
+- Bij discrepantie: rapporteer welke bestanden ontbreken en bied aan ze alsnog te committen.
+
+**Fase 5 — Sync**
+- Call `sync_vault` om de wijzigingen naar git te pushen.
+
+**Gedragsregel:** Zeg NOOIT "ik heb het gedaan" op basis van de API-response van de scraper. Zeg het pas nadat `list_files` de bestanden in de doelmap fysiek heeft bevestigd.
+"""
+
 _VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
 
@@ -227,6 +260,7 @@ def _build_system_prompt() -> str:
             + _PERSONALITY_DIRECTIVE
             + "\n\n---\n\n"
             + _VAULT_PROMPT
+            + _SCRAPING_PROTOCOL
             + _load_acl()
             + _load_moltbook_credentials()
         )
