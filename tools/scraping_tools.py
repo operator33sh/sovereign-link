@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 # ── project paths ──────────────────────────────────────────────────────────────
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AGENT_TEMP = os.path.join(_PROJECT_ROOT, ".agent_temp")
-_BUFFER_DIR = os.path.join(_AGENT_TEMP, "scraping_buffer")
+
+# Buffer lives inside the vault so read_vault() can access scraped files directly.
+# Vault path is resolved at import time to avoid circular imports.
+from tools.vault import VAULT_PATH as _VAULT_PATH  # noqa: E402
+_BUFFER_DIR = os.path.join(_VAULT_PATH, "scraping_buffer")
 
 # ── rate limiting ──────────────────────────────────────────────────────────────
 _RATE_DELAY = 1.5   # seconds between requests (polite crawl)
@@ -385,7 +389,7 @@ def scrape_page_full(url: str) -> str:
         "headings_count": len(data["headings"]),
         "internal_links_count": len(data["internal_links"]),
         "used_browser": used_browser,
-        "saved_to": f".agent_temp/scraping_buffer/{fname}",
+        "saved_to": f"scraping_buffer/{fname}",
         "bytes_written": actual_size,
         "markdown_preview": data["markdown"][:800],
     }, ensure_ascii=False, indent=2)
@@ -470,7 +474,7 @@ def batch_extract_content(url_list_json: str) -> str:
             "url": url,
             "status": "ok",
             "title": data["title"],
-            "file": f".agent_temp/scraping_buffer/{fname}",
+            "file": f"scraping_buffer/{fname}",
             "bytes_written": actual_size,
         })
 
@@ -485,7 +489,7 @@ def batch_extract_content(url_list_json: str) -> str:
         "total": len(url_list),
         "ok": ok_count,
         "errors": err_count,
-        "buffer_dir": ".agent_temp/scraping_buffer/",
+        "buffer_dir": "scraping_buffer/",
         "buffer_dir_absolute": _BUFFER_DIR,
         "results": results,
     }, ensure_ascii=False, indent=2)
