@@ -643,7 +643,7 @@ def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jp
 def transcribe_audio(file_path: str) -> str:
     """Transcribe an audio file locally using faster-whisper."""
     model = _get_whisper()
-    segments, _ = model.transcribe(file_path)
+    segments, _ = model.transcribe(file_path, language="nl")
     return " ".join(seg.text for seg in segments).strip()
 
 
