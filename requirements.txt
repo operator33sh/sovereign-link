@@ -7,3 +7,4 @@ faster-whisper
 playwright
 croniter
 mcp
+edge-tts

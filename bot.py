@@ -22,6 +22,7 @@ from tools import write_vault, sync_vault, generate_time_tag
 from memory_manager import run_memory_pipeline
 from agent import run_system_check
 import chat_bridge
+import tts as _tts
 from session_logger import session_logger
 from scheduler import scheduler as _scheduler
 from automations import automation_engine as _automation_engine
@@ -59,6 +60,49 @@ _proactive_loop: "asyncio.AbstractEventLoop | None" = None
 # Active LLM request — set during handle_message so /cancel can abort it.
 _active_cancel_event: "threading.Event | None" = None
 _active_llm_task: "asyncio.Task | None" = None
+
+# Voice mode: when True, Luna's text replies are also sent as voice notes.
+# Automatically active for voice-message inputs; toggled by /voice for text inputs.
+_voice_mode: bool = False
+
+
+async def _send_voice_reply(update: "Update", text: str) -> None:
+    """Synthesise *text* with edge-tts and send the result as a Telegram voice note.
+
+    Runs as a fire-and-forget asyncio task so the text reply is never delayed.
+    OGG OPUS files are sent via reply_voice; MP3 fallback uses reply_audio.
+    """
+    if not text or not text.strip():
+        return
+    try:
+        audio_path = await _tts.synthesize(text)
+        if not audio_path:
+            return
+        is_ogg = audio_path.endswith(".ogg")
+        try:
+            with open(audio_path, "rb") as f:
+                if is_ogg:
+                    await update.message.reply_voice(f)
+                else:
+                    await update.message.reply_audio(f, title="Luna")
+        finally:
+            _tts._safe_remove(audio_path)
+    except Exception:
+        logger.exception("Voice reply synthesis/send failed")
+
+
+async def cmd_voice(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Toggle voice mode: /voice  — when on, text replies are also spoken."""
+    if not _is_authorized(update):
+        return
+    global _voice_mode
+    _voice_mode = not _voice_mode
+    status = "ingeschakeld" if _voice_mode else "uitgeschakeld"
+    await update.message.reply_text(
+        f"🎙 Voice Mode {status}.\n"
+        + ("Luna stuurt nu ook een gesproken antwoord bij elk tekstbericht." if _voice_mode
+           else "Alleen tekstantwoorden.")
+    )
 
 
 def _save_session_draft() -> None:
@@ -422,6 +466,8 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         stripped = _strip_timestamps(reply)
         if stripped:
             await update.message.reply_text(stripped)
+            # Voice input → always reply with voice (fire-and-forget alongside text)
+            asyncio.create_task(_send_voice_reply(update, stripped))
         else:
             logger.warning("LLM run(): leeg antwoord voor audiobericht")
             await update.message.reply_text("(Geen antwoord ontvangen van het model. Probeer het opnieuw.)")
@@ -568,6 +614,8 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     stripped = _strip_timestamps(reply)
     if stripped:
         await update.message.reply_text(stripped)
+        if _voice_mode:
+            asyncio.create_task(_send_voice_reply(update, stripped))
     else:
         logger.warning("LLM run(): leeg antwoord voor bericht: %r", user_text[:100])
         await update.message.reply_text("(Geen antwoord ontvangen van het model. Probeer het opnieuw.)")
@@ -690,6 +738,7 @@ async def _post_init(app: Application) -> None:
         BotCommand("sleep", "Enable sleep mode — hold non-urgent notifications"),
         BotCommand("wake", "Disable sleep mode — resume proactive notifications"),
         BotCommand("timezone", "Get or set local timezone (/timezone Europe/Amsterdam)"),
+        BotCommand("voice", "Toggle voice mode — Luna speaks her replies"),
     ])
 
 
@@ -764,6 +813,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("sleep", cmd_sleep))
     app.add_handler(CommandHandler("wake", cmd_wake))
     app.add_handler(CommandHandler("timezone", cmd_timezone))
+    app.add_handler(CommandHandler("voice", cmd_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
