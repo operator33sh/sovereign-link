@@ -247,9 +247,7 @@ _HTML = r"""<!DOCTYPE html>
 
     :root {
       --bg:           #0d0d0d;
-      --surface:      #161616;
       --accent:       #7c5cbf;
-      --accent-dim:   #4a3571;
       --accent-light: #9b7fd4;
       --text:         #e2e2e2;
       --text-dim:     #666;
@@ -269,7 +267,6 @@ _HTML = r"""<!DOCTYPE html>
       overflow: hidden;
     }
 
-    /* ── Header ── */
     header {
       display: flex;
       align-items: center;
@@ -293,7 +290,6 @@ _HTML = r"""<!DOCTYPE html>
       color: var(--text-dim);
     }
 
-    /* ── Chat ── */
     #chat {
       flex: 1;
       overflow-y: auto;
@@ -334,14 +330,13 @@ _HTML = r"""<!DOCTYPE html>
     }
     .bubble.luna .label { color: var(--accent-light); }
 
-    /* ── Footer ── */
     footer {
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 0.55rem;
-      padding: 1rem 1.2rem 1.4rem;
+      gap: 0.5rem;
+      padding: 0.9rem 1.2rem 1.3rem;
       border-top: 1px solid #1c1c1c;
     }
 
@@ -352,14 +347,31 @@ _HTML = r"""<!DOCTYPE html>
       text-align: center;
     }
 
+    /* Volume bar — shows live mic level */
+    #vol-bar-wrap {
+      width: 160px;
+      height: 4px;
+      background: #1e1e1e;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #vol-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 0.05s linear, background 0.2s;
+    }
+    #vol-bar.speaking { background: #2ecc71; }
+
+    /* Mute button — toggles VAD on/off */
     #mic-btn {
-      position: relative;
-      width: 66px; height: 66px;
+      width: 62px; height: 62px;
       border-radius: 50%;
       border: none;
       background: var(--accent);
       color: #fff;
-      font-size: 1.65rem;
+      font-size: 1.6rem;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -367,47 +379,35 @@ _HTML = r"""<!DOCTYPE html>
       user-select: none;
       -webkit-user-select: none;
       outline: none;
-      transition: background 0.15s;
+      transition: background 0.2s;
     }
-    #mic-btn:hover:not(.recording) { background: var(--accent-light); }
-    #mic-btn:active:not(.recording) { transform: scale(0.96); }
+    #mic-btn:hover { background: var(--accent-light); }
+    #mic-btn.muted { background: #444; }
 
-    #mic-btn.recording {
-      background: #c0392b;
-      animation: rec-pulse 1.1s ease-in-out infinite;
-    }
-    @keyframes rec-pulse {
-      0%, 100% { box-shadow: 0 0 0 0   rgba(192,57,43,0.4); }
-      50%       { box-shadow: 0 0 0 14px rgba(192,57,43,0);   }
-    }
-
-    #hint {
-      font-size: 0.68rem;
-      color: #393939;
-    }
-
-    /* Waveform bars shown while speaking */
+    /* Animated waveform while Luna speaks */
     #waveform {
       display: none;
       gap: 3px;
       align-items: flex-end;
-      height: 18px;
+      height: 16px;
     }
     #waveform.active { display: flex; }
     #waveform span {
       width: 3px;
       border-radius: 2px;
       background: var(--accent-light);
-      animation: bar 0.7s ease-in-out infinite;
+      animation: bar 0.65s ease-in-out infinite;
     }
     #waveform span:nth-child(2) { animation-delay: .1s; }
     #waveform span:nth-child(3) { animation-delay: .2s; }
-    #waveform span:nth-child(4) { animation-delay: .3s; }
-    #waveform span:nth-child(5) { animation-delay: .2s; }
+    #waveform span:nth-child(4) { animation-delay: .15s; }
+    #waveform span:nth-child(5) { animation-delay: .05s; }
     @keyframes bar {
-      0%,100% { height: 4px; }
-      50%      { height: 16px; }
+      0%,100% { height: 3px; }
+      50%      { height: 14px; }
     }
+
+    #hint { font-size: 0.67rem; color: #383838; }
   </style>
 </head>
 <body>
@@ -421,11 +421,12 @@ _HTML = r"""<!DOCTYPE html>
 
 <footer>
   <div id="status">Verbinden&hellip;</div>
-  <button id="mic-btn" aria-label="Microfoon — druk om te spreken">&#127897;</button>
+  <div id="vol-bar-wrap"><div id="vol-bar"></div></div>
+  <button id="mic-btn" aria-label="Microfoon dempen/activeren">&#127897;</button>
   <div id="waveform" aria-hidden="true">
     <span></span><span></span><span></span><span></span><span></span>
   </div>
-  <div id="hint">Klik &amp; vasthouden &bull; of houd Spatie vast</div>
+  <div id="hint" id="hint">Spreekt automatisch &bull; klik om te dempen</div>
 </footer>
 
 <script>
@@ -437,24 +438,32 @@ _HTML = r"""<!DOCTYPE html>
   const statusEl = document.getElementById('status');
   const connDot  = document.getElementById('conn-dot');
   const waveform = document.getElementById('waveform');
+  const volBar   = document.getElementById('vol-bar');
 
-  const WS_URL   = `ws://${location.host}/ws`;
+  const WS_URL = `ws://${location.host}/ws`;
 
-  let ws, mediaRecorder;
+  // ── VAD config ────────────────────────────────────────
+  const SPEECH_RMS_THRESHOLD = 10;   // 0–128 scale; raise if too sensitive
+  const SILENCE_BEFORE_SEND  = 1400; // ms of quiet before sending
+  const MIN_SPEECH_MS        = 250;  // discard clips shorter than this
+
+  let ws, mediaRecorder, audioCtx, analyser, dataArray;
+  let muted       = false;   // user clicked mute
+  let botSpeaking = false;   // Luna is playing audio — pause VAD capture
   let recording   = false;
+  let speechAt    = null;
+  let silenceAt   = null;
   const chunks    = [];
-
-  // Sequential audio playback — never overlaps Luna's replies
   let audioQueue  = Promise.resolve();
 
   // ── WebSocket ─────────────────────────────────────────
   function connect() {
-    ws             = new WebSocket(WS_URL);
-    ws.binaryType  = 'arraybuffer';
+    ws            = new WebSocket(WS_URL);
+    ws.binaryType = 'arraybuffer';
 
     ws.onopen  = () => {
       connDot.style.background = '#2ecc71';
-      setStatus('Verbonden &mdash; klik of houd spatie om te spreken');
+      setStatus('Luistert automatisch');
     };
     ws.onclose = () => {
       connDot.style.background = '#e74c3c';
@@ -463,112 +472,145 @@ _HTML = r"""<!DOCTYPE html>
       setTimeout(connect, 3000);
     };
     ws.onerror = () => { connDot.style.background = '#e74c3c'; };
-
     ws.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) {
-        enqueueAudio(e.data);
-      } else {
-        handleMessage(JSON.parse(e.data));
-      }
+      if (e.data instanceof ArrayBuffer) enqueueAudio(e.data);
+      else handleMsg(JSON.parse(e.data));
     };
   }
 
-  function handleMessage(msg) {
+  function handleMsg(msg) {
     switch (msg.type) {
-      case 'greeting':      addBubble('luna', msg.text); break;
-      case 'transcript':    addBubble('user', msg.text); break;
-      case 'response_text': addBubble('luna', msg.text); break;
-      case 'status':        applyStatus(msg.state);      break;
-      case 'error':         setStatus('&#9888; ' + msg.text); break;
+      case 'greeting':      addBubble('luna', msg.text);           break;
+      case 'transcript':    addBubble('user', msg.text);           break;
+      case 'response_text': addBubble('luna', msg.text);           break;
+      case 'status':        applyStatus(msg.state);                break;
+      case 'error':         setStatus('&#9888; ' + msg.text);      break;
     }
   }
 
   function applyStatus(state) {
-    const labels = {
-      listening: 'Luisteren&hellip;',
-      thinking:  'Denken&hellip;',
-      speaking:  'Luna spreekt&hellip;',
-    };
+    const labels = { listening: 'Luistert automatisch', thinking: 'Denken&hellip;', speaking: 'Luna spreekt&hellip;' };
     setStatus(labels[state] || '');
     setWave(state === 'speaking');
   }
 
-  // ── Audio playback queue ──────────────────────────────
+  // ── Sequential audio playback ─────────────────────────
   function enqueueAudio(buffer) {
     audioQueue = audioQueue.then(() => new Promise((resolve) => {
+      botSpeaking = true;
       const blob = new Blob([buffer], { type: 'audio/mpeg' });
       const url  = URL.createObjectURL(blob);
       const a    = new Audio(url);
-      a.onended  = () => { URL.revokeObjectURL(url); resolve(); };
-      a.onerror  = () => { URL.revokeObjectURL(url); resolve(); };
-      a.play().catch(resolve);
+      const done = () => {
+        URL.revokeObjectURL(url);
+        // Short pause before re-enabling VAD (echo tail)
+        setTimeout(() => { botSpeaking = false; }, 400);
+        resolve();
+      };
+      a.onended = done;
+      a.onerror = done;
+      a.play().catch(done);
     }));
   }
 
-  // ── MediaRecorder ─────────────────────────────────────
-  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-    .then((stream) => {
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      mediaRecorder = new MediaRecorder(stream, { mimeType });
+  // ── Microphone + VAD setup ────────────────────────────
+  navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: false,
+  }).then((stream) => {
+    // Web Audio for VAD analysis
+    audioCtx  = new AudioContext();
+    const src = audioCtx.createMediaStreamSource(stream);
+    analyser  = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.3;
+    src.connect(analyser);
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunks.push(e.data);
-      };
+    // MediaRecorder for capturing speech clips
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
 
-      mediaRecorder.onstop = () => {
-        if (!chunks.length) return;
-        const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
-        chunks.length = 0;
-        if (ws?.readyState === WebSocket.OPEN) {
-          blob.arrayBuffer().then((buf) => ws.send(buf));
-        }
-        setStatus('Verwerken&hellip;');
-      };
-    })
-    .catch((err) => {
-      setStatus('Microfoon geweigerd: ' + err.message);
-      btn.disabled = true;
-    });
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    mediaRecorder.onstop = () => {
+      if (!chunks.length) return;
+      const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
+      chunks.length = 0;
+      if (ws?.readyState === WebSocket.OPEN) {
+        blob.arrayBuffer().then((buf) => ws.send(buf));
+      }
+      setStatus('Verwerken&hellip;');
+    };
 
-  function startRec() {
-    if (!mediaRecorder || recording || mediaRecorder.state === 'recording') return;
-    chunks.length = 0;
-    try { mediaRecorder.start(100); } catch { return; }
-    recording = true;
-    btn.classList.add('recording');
-    btn.innerHTML = '&#9209;';  // ⏹
-    setStatus('Opnemen&hellip; laat los om te versturen');
-    setWave(false);
-  }
-
-  function stopRec() {
-    if (!recording) return;
-    if (mediaRecorder?.state === 'recording') {
-      try { mediaRecorder.stop(); } catch {}
-    }
-    recording = false;
-    btn.classList.remove('recording');
-    btn.innerHTML = '&#127897;'; // 🎙
-  }
-
-  // ── Input bindings ────────────────────────────────────
-  btn.addEventListener('mousedown',   (e) => { e.preventDefault(); startRec(); });
-  btn.addEventListener('mouseup',     (e) => { e.preventDefault(); stopRec();  });
-  btn.addEventListener('mouseleave',  stopRec);
-  btn.addEventListener('touchstart',  (e) => { e.preventDefault(); startRec(); }, { passive: false });
-  btn.addEventListener('touchend',    (e) => { e.preventDefault(); stopRec();  }, { passive: false });
-  btn.addEventListener('touchcancel', stopRec);
-
-  document.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && !e.repeat && document.activeElement === document.body) {
-      e.preventDefault();
-      startRec();
-    }
+    requestAnimationFrame(vadTick);
+  }).catch((err) => {
+    setStatus('Microfoon geweigerd: ' + err.message);
+    btn.disabled = true;
   });
-  document.addEventListener('keyup', (e) => {
-    if (e.code === 'Space') stopRec();
+
+  // ── VAD loop ──────────────────────────────────────────
+  function getRMS() {
+    analyser.getByteTimeDomainData(dataArray);
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const v = (dataArray[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / dataArray.length) * 128; // 0–128
+  }
+
+  function vadTick() {
+    requestAnimationFrame(vadTick);
+    if (!analyser) return;
+
+    const rms      = getRMS();
+    const pct      = Math.min(100, (rms / 40) * 100);
+    volBar.style.width = pct + '%';
+    volBar.classList.toggle('speaking', recording);
+
+    if (muted || botSpeaking) return;
+
+    const now      = Date.now();
+    const isSpeech = rms > SPEECH_RMS_THRESHOLD;
+
+    if (isSpeech) {
+      silenceAt = null;
+      if (!recording) {
+        speechAt  = now;
+        chunks.length = 0;
+        try { mediaRecorder.start(80); } catch {}
+        recording = true;
+      }
+    } else if (recording) {
+      if (!silenceAt) silenceAt = now;
+      if (now - silenceAt > SILENCE_BEFORE_SEND) {
+        const speechDuration = silenceAt - speechAt;
+        try { mediaRecorder.stop(); } catch {}
+        recording = false;
+        speechAt  = null;
+        silenceAt = null;
+        if (speechDuration < MIN_SPEECH_MS) {
+          // Too short — discard silently
+          chunks.length = 0;
+        }
+      }
+    }
+  }
+
+  // ── Mute button ───────────────────────────────────────
+  btn.addEventListener('click', () => {
+    muted = !muted;
+    if (muted && recording) {
+      try { mediaRecorder.stop(); } catch {}
+      recording = false;
+      chunks.length = 0;
+    }
+    btn.classList.toggle('muted', muted);
+    btn.innerHTML  = muted ? '&#128263;' : '&#127897;'; // 🔇 / 🎙
+    setStatus(muted ? 'Gedempt' : 'Luistert automatisch');
   });
 
   // ── UI helpers ────────────────────────────────────────
@@ -585,8 +627,8 @@ _HTML = r"""<!DOCTYPE html>
     requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
   }
 
-  function setStatus(html)   { statusEl.innerHTML = html; }
-  function setWave(active)   { waveform.classList.toggle('active', active); }
+  function setStatus(html) { statusEl.innerHTML = html; }
+  function setWave(on)     { waveform.classList.toggle('active', on); }
 
   connect();
 })();
