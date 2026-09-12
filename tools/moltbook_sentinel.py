@@ -425,6 +425,8 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
         if _home_key(a) not in seen
     ]
 
+    from tools.moltbook_ignore import is_ignored
+
     for i, activity in enumerate(new_activities):
         if i > 0:
             import time
@@ -435,6 +437,16 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
         commenters = activity.get("latest_commenters") or []
         author = commenters[0] if commenters else "unknown"
         count = activity.get("new_notification_count", 1)
+
+        # Silent filter: skip activity where ALL known commenters are ignored
+        visible_commenters = [c for c in commenters if not is_ignored(c)]
+        if commenters and not visible_commenters:
+            seen_post_ids.append(pid)  # mark seen so it won't resurface
+            continue
+        if visible_commenters:
+            author = visible_commenters[0]
+            commenters = visible_commenters
+            count = len(visible_commenters)
 
         # Fetch actual comment text
         _, snippet, _ = _fetch_latest_comment(pid)
@@ -469,6 +481,12 @@ def run_moltbook_sentinel(_args: dict | None = None) -> str:
     for notif in new_notifs:
         ntype = _notif_type(notif)
         content = str(notif.get("content") or notif.get("body") or notif.get("message") or "")
+
+        # Silent filter: mark ignored-author notifications as seen and skip
+        _early_author = _extract_author_from_content(content) or _extract_author(notif)
+        if is_ignored(_early_author):
+            seen_notif_ids.append(_notif_id(notif))
+            continue
 
         if ntype == "follow":
             author = _extract_author_from_content(content) or _extract_author(notif)

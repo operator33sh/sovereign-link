@@ -37,11 +37,14 @@ from tools.moltbook_sentinel import DEFINITIONS as _msd, HANDLERS as _msh
 from tools.health import DEFINITIONS as _hld, HANDLERS as _hlh
 from tools.gmail import DEFINITIONS as _gmd, HANDLERS as _gmh
 from tools.calendar import DEFINITIONS as _cld, HANDLERS as _clh
+from tools.scraping_tools import DEFINITIONS as _scrd, HANDLERS as _scrh
+from tools.claim_tools import DEFINITIONS as _ctd, HANDLERS as _cth
+from tools.moltbook_ignore import DEFINITIONS as _mid, HANDLERS as _mih
 
-TOOL_DEFINITIONS: list[dict] = _vd + _hd + _sd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld
+TOOL_DEFINITIONS: list[dict] = _vd + _hd + _sd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid
 
 TOOL_HANDLERS: dict[str, callable] = {
-    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh,
+    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih,
 }
 
 # Sub-agents do not get write_vault — they must use write_temp → commit_to_vault
