@@ -443,9 +443,9 @@ _HTML = r"""<!DOCTYPE html>
   const WS_URL = `ws://${location.host}/ws`;
 
   // ── VAD config ────────────────────────────────────────
-  const SPEECH_RMS_THRESHOLD = 10;   // 0–128 scale; raise if too sensitive
+  const SPEECH_RMS_THRESHOLD = 22;   // 0–128 scale; raise if too sensitive
   const SILENCE_BEFORE_SEND  = 1400; // ms of quiet before sending
-  const MIN_SPEECH_MS        = 250;  // discard clips shorter than this
+  const MIN_SPEECH_MS        = 300;  // discard clips shorter than this
 
   let ws, mediaRecorder, audioCtx, analyser, dataArray;
   let muted       = false;   // user clicked mute
@@ -503,8 +503,8 @@ _HTML = r"""<!DOCTYPE html>
       const a    = new Audio(url);
       const done = () => {
         URL.revokeObjectURL(url);
-        // Short pause before re-enabling VAD (echo tail)
-        setTimeout(() => { botSpeaking = false; }, 400);
+        // Pause before re-enabling VAD — lets speaker echo die down
+        setTimeout(() => { botSpeaking = false; }, 1500);
         resolve();
       };
       a.onended = done;
