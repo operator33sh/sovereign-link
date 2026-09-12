@@ -20,11 +20,15 @@ logger = logging.getLogger(__name__)
 TTS_VOICE = os.environ.get("TTS_VOICE", "nl-NL-FennaNeural")
 
 
-async def synthesize(text: str) -> str | None:
+async def synthesize(text: str, prefer_mp3: bool = False) -> str | None:
     """
     Synthesise *text* to speech and return a path to a temporary audio file.
 
-    Returns an OGG OPUS path when ffmpeg is available, otherwise an MP3 path.
+    prefer_mp3=False (default): returns OGG OPUS when ffmpeg is available
+                                (Telegram voice messages require OGG).
+    prefer_mp3=True:            returns MP3 directly without OGG conversion
+                                (browsers play MP3 natively).
+
     Returns None on failure or empty input.
     The caller is responsible for deleting the returned file.
     """
@@ -52,6 +56,9 @@ async def synthesize(text: str) -> str | None:
         for p in (tmp_mp3, tmp_ogg):
             _safe_remove(p)
         return None
+
+    if prefer_mp3:
+        return tmp_mp3
 
     # Convert MP3 → OGG OPUS (Telegram's native voice format)
     try:
