@@ -54,7 +54,9 @@ _VOICE_WEB_ADDENDUM = (
     "Je reageert via een live webbrowser gesprek. Houd antwoorden beknopt en "
     "natuurlijk voor gesproken audio — geen markdown, geen opsommingstekens, "
     "geen codeblokken. Spreek in volledige zinnen. Bij complexe vragen: "
-    "vat samen en bied aan om verder te gaan."
+    "vat samen en bied aan om verder te gaan.\n\n"
+    "BELANGRIJK: Antwoord ALTIJD in het Nederlands, ongeacht de taal van de invoer. "
+    "Dit is absoluut verplicht en niet onderhandelbaar. Spreek nooit Engels."
 )
 
 
