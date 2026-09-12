@@ -236,10 +236,11 @@ def _voice_ask_luna(user_text: str, history: list[dict]) -> str:
 # ── Embedded HTML/JS interface ─────────────────────────────────────────────────
 
 _HTML = r"""<!DOCTYPE html>
-<html lang="nl">
+<html lang="nl" translate="no">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="google" content="notranslate">
   <title>Sovereign Link — Voice</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
