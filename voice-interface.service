@@ -1,6 +1,6 @@
 [Unit]
-Description=Sovereign-Link Telegram Bot
-After=network.target
+Description=Sovereign-Link Voice Interface (Web UI op port 8766)
+After=network.target sovereign-link.service
 
 [Service]
 Type=simple
@@ -8,7 +8,7 @@ User=wouter
 WorkingDirectory=/home/wouter/Development/sovereign-link
 EnvironmentFile=/home/wouter/Development/sovereign-link/.env
 Environment=LD_LIBRARY_PATH=/usr/local/lib/ollama/cuda_v12
-ExecStart=/home/wouter/Development/sovereign-link/venv/bin/python main.py
+ExecStart=/home/wouter/Development/sovereign-link/venv/bin/uvicorn voice_interface:app --host 0.0.0.0 --port 8766
 Restart=on-failure
 RestartSec=5
 

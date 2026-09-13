@@ -51,12 +51,21 @@ _GREETING = "Sovereign Link actief. Ik luister, Agent."
 
 _VOICE_WEB_ADDENDUM = (
     "\n\n## Voice Mode (Web Interface)\n"
-    "Je reageert via een live webbrowser gesprek. Houd antwoorden beknopt en "
-    "natuurlijk voor gesproken audio — geen markdown, geen opsommingstekens, "
-    "geen codeblokken. Spreek in volledige zinnen. Bij complexe vragen: "
-    "vat samen en bied aan om verder te gaan.\n\n"
+    "Je reageert via een live gesproken gesprek. Reageer als in een échte conversatie: "
+    "**maximaal 1 à 3 zinnen per beurt**. Geen opsommingen, geen markdown, geen codeblokken. "
+    "Geen lange uitleg tenzij de gebruiker daar expliciet om vraagt. "
+    "Als iets complex is: geef één kernzin en vraag of je verder moet gaan. "
+    "Stel nooit meer dan één vraag tegelijk.\n\n"
     "BELANGRIJK: Antwoord ALTIJD in het Nederlands, ongeacht de taal van de invoer. "
-    "Dit is absoluut verplicht en niet onderhandelbaar. Spreek nooit Engels."
+    "Dit is absoluut verplicht en niet onderhandelbaar. Spreek nooit Engels.\n\n"
+    "## Stemherkenning & zelflerend systeem\n"
+    "Als de transcriptie begint met '[Lage transcriptie-zekerheid:', vraag dan kort "
+    "of je het goed hebt verstaan voordat je inhoudelijk antwoordt. Bijvoorbeeld: "
+    "'Heb ik je goed begrepen: je zei [samenvatting]?'\n"
+    "Als Wouter aangeeft dat je een woord of naam verkeerd hebt verstaan, roep dan "
+    "save_voice_correction aan met het fout getranscribeerde woord en de correcte versie. "
+    "Dit wordt permanent opgeslagen zodat je het de volgende keer wel goed verstaat. "
+    "Bevestig kort dat je de correctie hebt opgeslagen."
 )
 
 
@@ -120,8 +129,11 @@ async def ws_handler(ws: WebSocket) -> None:
                     _pool,
                     lambda: subprocess.run(
                         [
-                            "ffmpeg", "-y", "-i", tmp_webm,
+                            "ffmpeg", "-y",
+                            "-fflags", "+igndts+discardcorrupt",
+                            "-i", tmp_webm,
                             "-ar", "16000", "-ac", "1",
+                            "-acodec", "pcm_s16le",
                             "-f", "wav", tmp_wav,
                         ],
                         capture_output=True,
@@ -129,20 +141,27 @@ async def ws_handler(ws: WebSocket) -> None:
                     ),
                 )
                 if conv.returncode != 0:
-                    logger.warning("ffmpeg conversion failed: %s", conv.stderr[:300].decode(errors="replace"))
+                    logger.warning("ffmpeg conversion failed: %s", conv.stderr[-1500:].decode(errors="replace"))
                     await _send_json({"type": "error", "text": "Audio conversie mislukt."})
                     continue
 
                 # STT
-                from llm import transcribe_audio
-                transcript: str = await loop.run_in_executor(_pool, transcribe_audio, tmp_wav)
-                transcript = (transcript or "").strip()
+                from llm import transcribe_audio_full
+                transcript_raw, confidence = await loop.run_in_executor(
+                    _pool, transcribe_audio_full, tmp_wav
+                )
+                transcript = (transcript_raw or "").strip()
 
                 if not transcript:
                     await _send_json({"type": "status", "state": "listening"})
                     continue
 
-                logger.info("Voice [USER]: %s", transcript)
+                # Prefix low-confidence transcriptions so Luna can ask for confirmation
+                _CONFIDENCE_THRESHOLD = 0.45
+                if confidence < _CONFIDENCE_THRESHOLD:
+                    transcript = f"[Lage transcriptie-zekerheid: {confidence:.2f}] {transcript}"
+
+                logger.info("Voice [USER] (conf=%.2f): %s", confidence, transcript)
                 await _send_json({"type": "transcript", "text": transcript})
                 await _send_json({"type": "status",     "state": "thinking"})
 
@@ -447,16 +466,34 @@ _HTML = r"""<!DOCTYPE html>
   // ── VAD config ────────────────────────────────────────
   const SPEECH_RMS_THRESHOLD = 22;   // 0–128 scale; raise if too sensitive
   const SILENCE_BEFORE_SEND  = 1400; // ms of quiet before sending
-  const MIN_SPEECH_MS        = 300;  // discard clips shorter than this
+  const MIN_SPEECH_MS        = 500;  // discard clips shorter than this
 
   let ws, mediaRecorder, audioCtx, analyser, dataArray;
-  let muted       = false;   // user clicked mute
-  let botSpeaking = false;   // Luna is playing audio — pause VAD capture
-  let recording   = false;
-  let speechAt    = null;
-  let silenceAt   = null;
-  const chunks    = [];
-  let audioQueue  = Promise.resolve();
+  let muted           = false;   // user clicked mute
+  let botSpeaking     = false;   // Luna is playing audio — pause VAD capture
+  let botSpeakingTimer = null;   // watchdog: force-release if stuck
+  let recording       = false;
+  let speechAt        = null;
+  let silenceAt       = null;
+  let discardNext     = false;   // discard clip if too short
+  const chunks        = [];
+  let audioQueue      = Promise.resolve();
+
+  const ECHO_COOLDOWN_MS  = 800;   // ms after audio ends before VAD re-enables
+  const SPEAK_WATCHDOG_MS = 20000; // force-release botSpeaking after this long
+
+  function setBotSpeaking(val) {
+    botSpeaking = val;
+    if (botSpeakingTimer) { clearTimeout(botSpeakingTimer); botSpeakingTimer = null; }
+    if (val) {
+      botSpeakingTimer = setTimeout(() => {
+        botSpeaking = false;
+        botSpeakingTimer = null;
+        setStatus('Luistert automatisch');
+        setWave(false);
+      }, SPEAK_WATCHDOG_MS);
+    }
+  }
 
   // ── WebSocket ─────────────────────────────────────────
   function connect() {
@@ -494,19 +531,23 @@ _HTML = r"""<!DOCTYPE html>
     const labels = { listening: 'Luistert automatisch', thinking: 'Denken&hellip;', speaking: 'Luna spreekt&hellip;' };
     setStatus(labels[state] || '');
     setWave(state === 'speaking');
+    // Safety: server says it's our turn — always release VAD after echo cooldown
+    if (state === 'listening') {
+      setTimeout(() => { setBotSpeaking(false); }, ECHO_COOLDOWN_MS);
+    }
   }
 
   // ── Sequential audio playback ─────────────────────────
   function enqueueAudio(buffer) {
     audioQueue = audioQueue.then(() => new Promise((resolve) => {
-      botSpeaking = true;
+      setBotSpeaking(true);
       const blob = new Blob([buffer], { type: 'audio/mpeg' });
       const url  = URL.createObjectURL(blob);
       const a    = new Audio(url);
       const done = () => {
         URL.revokeObjectURL(url);
-        // Pause before re-enabling VAD — lets speaker echo die down
-        setTimeout(() => { botSpeaking = false; }, 1500);
+        playClick();
+        setTimeout(() => { setBotSpeaking(false); }, ECHO_COOLDOWN_MS);
         resolve();
       };
       a.onended = done;
@@ -538,9 +579,15 @@ _HTML = r"""<!DOCTYPE html>
       if (e.data && e.data.size > 0) chunks.push(e.data);
     };
     mediaRecorder.onstop = () => {
+      if (discardNext) {
+        chunks.length = 0;
+        discardNext = false;
+        return;
+      }
       if (!chunks.length) return;
       const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
       chunks.length = 0;
+      playClick();
       if (ws?.readyState === WebSocket.OPEN) {
         blob.arrayBuffer().then((buf) => ws.send(buf));
       }
@@ -595,8 +642,8 @@ _HTML = r"""<!DOCTYPE html>
         speechAt  = null;
         silenceAt = null;
         if (speechDuration < MIN_SPEECH_MS) {
-          // Too short — discard silently
-          chunks.length = 0;
+          // Too short — discard silently (flag checked in onstop)
+          discardNext = true;
         }
       }
     }
@@ -610,10 +657,33 @@ _HTML = r"""<!DOCTYPE html>
       recording = false;
       chunks.length = 0;
     }
+    setBotSpeaking(false);
     btn.classList.toggle('muted', muted);
     btn.innerHTML  = muted ? '&#128263;' : '&#127897;'; // 🔇 / 🎙
     setStatus(muted ? 'Gedempt' : 'Luistert automatisch');
   });
+
+  // ── Feedback bleep ────────────────────────────────────
+  let _bleepCtx = null;
+  function playClick() {
+    try {
+      if (!_bleepCtx) _bleepCtx = new AudioContext();
+      _bleepCtx.resume().then(() => {
+        const t    = _bleepCtx.currentTime;
+        const osc  = _bleepCtx.createOscillator();
+        const gain = _bleepCtx.createGain();
+        osc.type   = 'sine';
+        osc.frequency.setValueAtTime(880, t);
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.8, t + 0.01);
+        gain.gain.linearRampToValueAtTime(0,   t + 0.15);
+        osc.connect(gain);
+        gain.connect(_bleepCtx.destination);
+        osc.start(t);
+        osc.stop(t + 0.15);
+      });
+    } catch {}
+  }
 
   // ── UI helpers ────────────────────────────────────────
   function addBubble(role, text) {

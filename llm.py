@@ -32,8 +32,16 @@ _personality_seeded = False
 def _get_whisper():
     global _whisper_model
     if _whisper_model is None:
+        import os, ctypes
+        _CUDA_LIB_PATH = "/usr/local/lib/ollama/cuda_v12"
+        os.environ["LD_LIBRARY_PATH"] = _CUDA_LIB_PATH + ":" + os.environ.get("LD_LIBRARY_PATH", "")
+        for lib in ("libcublas.so.12", "libcudnn.so.9"):
+            try:
+                ctypes.CDLL(f"{_CUDA_LIB_PATH}/{lib}")
+            except OSError:
+                pass
         from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+        _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cuda", compute_type="float16")
     return _whisper_model
 
 
@@ -640,11 +648,76 @@ def run_with_image(user_message: str, image_b64: str, mime_type: str = "image/jp
     return text
 
 
+_VOICE_INITIAL_PROMPT = (
+    "fractalisme, sovereign-link, vault, MOC, Obsidian, wikilink, "
+    "proactief, autonomie, persona, Luna, notitie, synthese, "
+    "tijdlijn, scheduler, reminder, briefing, automatie, ingest, "
+    "resonantie, drift, sessie, annotatie, context, prompt"
+)
+
+
+def _load_voice_corrections() -> dict[str, str]:
+    """Load the voice correction dictionary from the vault."""
+    path = os.path.join(_VAULT_PATH, ".system", "voice_corrections.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _apply_voice_corrections(text: str, corrections: dict[str, str]) -> str:
+    """Apply saved voice corrections (case-insensitive whole-word replacement)."""
+    import re as _re
+    for wrong, right in corrections.items():
+        pattern = _re.compile(r'\b' + _re.escape(wrong) + r'\b', _re.IGNORECASE)
+        text = pattern.sub(right, text)
+    return text
+
+
 def transcribe_audio(file_path: str) -> str:
     """Transcribe an audio file locally using faster-whisper."""
     model = _get_whisper()
-    segments, _ = model.transcribe(file_path, language="nl")
-    return " ".join(seg.text for seg in segments).strip()
+    segments, _ = model.transcribe(
+        file_path,
+        language="nl",
+        no_speech_threshold=0.3,
+        beam_size=5,
+        condition_on_previous_text=False,
+        initial_prompt=_VOICE_INITIAL_PROMPT,
+    )
+    text = " ".join(seg.text for seg in segments).strip()
+    corrections = _load_voice_corrections()
+    return _apply_voice_corrections(text, corrections)
+
+
+def transcribe_audio_full(file_path: str) -> tuple[str, float]:
+    """Transcribe and return (text, avg_confidence) where confidence is 0.0–1.0.
+
+    avg_confidence is derived from avg_logprob across segments (logprob 0 = perfect,
+    −1 ≈ 0.37, so we clamp and map to a 0–1 scale for easy thresholding).
+    """
+    import math as _math
+    model = _get_whisper()
+    segments, _ = model.transcribe(
+        file_path,
+        language="nl",
+        no_speech_threshold=0.6,
+        beam_size=5,
+        condition_on_previous_text=False,
+        initial_prompt=_VOICE_INITIAL_PROMPT,
+    )
+    seg_list = list(segments)
+    text = " ".join(seg.text for seg in seg_list).strip()
+    corrections = _load_voice_corrections()
+    text = _apply_voice_corrections(text, corrections)
+    logger.debug("transcribe_audio_full: %d segment(s), text=%r", len(seg_list), text[:80] if text else "")
+    if not seg_list:
+        return text, 0.0
+    avg_logprob = sum(seg.avg_logprob for seg in seg_list) / len(seg_list)
+    # Map logprob [-1.5, 0] → confidence [0, 1]; clamp outside that range
+    confidence = _math.exp(max(-1.5, min(0.0, avg_logprob)))
+    return text, round(confidence, 3)
 
 
 _AUTONOMOUS_TRIGGER = (
