@@ -22,6 +22,12 @@ _AGENT_SWARM_SIZE = int(os.environ.get("AGENT_SWARM_SIZE", 5))
 _SWARM_AGENT_TIMEOUT = int(os.environ.get("SWARM_AGENT_TIMEOUT", 300))   # 5 min watchdog
 _SWARM_MAX_RETRIES = int(os.environ.get("SWARM_MAX_RETRIES", 3))
 
+# Maximum characters injected into message history per tool result.
+# Keeps the payload well within Ollama's request size limits.
+# (list_files(".") can return 670 KB — the log truncates for display but the
+#  raw result was previously injected untruncated, causing 400 Bad Request.)
+_TOOL_RESULT_MAX_CHARS = int(os.environ.get("AGENT_TOOL_RESULT_MAX_CHARS", 12_000))
+
 _RETRY_CONTEXT_PREFIX = (
     "Vorige poging is getimed uit. Analyseer het blackboard om te zien waar de "
     "blokkade zat en probeer een alternatieve route naar het doel."
@@ -237,15 +243,29 @@ class BackgroundAgent:
                     logger.exception("Tool '%s' raised an unexpected error", fn_name)
                     result = f"Error: tool '{fn_name}' failed: {exc}"
 
+            result_str = str(result)
+            # Truncate before injecting into message history to prevent payload
+            # inflation from large tool results (e.g. list_files(".") → 670 KB)
+            # causing a 400 Bad Request from the Ollama API.
+            if len(result_str) > _TOOL_RESULT_MAX_CHARS:
+                content_for_llm = (
+                    result_str[:_TOOL_RESULT_MAX_CHARS]
+                    + f"\n\n[TRUNCATED — output was {len(result_str):,} chars; "
+                    f"only first {_TOOL_RESULT_MAX_CHARS:,} shown. "
+                    f"Use a more specific query to retrieve the full result.]"
+                )
+            else:
+                content_for_llm = result_str
+
             log_entries.append(
                 f"**Tool:** `{fn_name}`  \n"
                 f"**Args:** `{json.dumps(fn_args)}`  \n"
-                f"**Result:**\n```\n{str(result)[:800]}\n```"
+                f"**Result:**\n```\n{result_str[:800]}\n```"
             )
             self._messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
-                "content": result,
+                "content": content_for_llm,
             })
 
         return log_entries
