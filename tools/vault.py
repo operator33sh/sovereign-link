@@ -242,6 +242,48 @@ def list_files(directory: str = "") -> str:
     return "\n".join(sorted(paths))
 
 
+def list_files_paged(directory: str = "", page: int = 0, page_size: int = 8) -> str:
+    """Return one page of vault files. Use to traverse large directories safely.
+
+    page      — 0-indexed page number
+    page_size — files per page (default 8; keep ≤10 to stay within iteration budget)
+
+    Returns a header line with totals, then the file paths for this page.
+    Example: page=0, page_size=8 → files 1-8; page=1 → files 9-16; etc.
+    """
+    target = os.path.join(VAULT_PATH, directory) if directory else VAULT_PATH
+    real_target = os.path.realpath(target)
+    if not real_target.startswith(os.path.realpath(VAULT_PATH)):
+        return "Error: path traversal not allowed"
+    if not os.path.isdir(real_target):
+        return f"Error: '{directory}' is not a directory in the vault"
+
+    paths = []
+    for root, _, files in os.walk(real_target):
+        for fname in sorted(files):
+            full = os.path.join(root, fname)
+            paths.append(os.path.relpath(full, VAULT_PATH))
+    paths = sorted(paths)
+
+    total = len(paths)
+    if total == 0:
+        return "Directory is empty."
+
+    page_size = max(1, min(page_size, 50))
+    total_pages = (total + page_size - 1) // page_size
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * page_size
+    chunk = paths[start: start + page_size]
+    end = start + len(chunk)
+
+    header = (
+        f"[Page {page + 1}/{total_pages} — files {start + 1}–{end} of {total}]"
+        f"  next_page={page + 1 if page + 1 < total_pages else 'DONE'}"
+    )
+    return header + "\n" + "\n".join(chunk)
+
+
 def move_file(source_path: str, destination_path: str) -> str:
     src = os.path.join(VAULT_PATH, source_path)
     dst = os.path.join(VAULT_PATH, destination_path)
@@ -436,6 +478,21 @@ def inject_links(link_matrix_json: str) -> str:
     )
 
 
+def save_voice_correction(wrong: str, right: str) -> str:
+    """Save a voice misrecognition correction to .system/voice_corrections.json."""
+    path = os.path.join(VAULT_PATH, ".system", "voice_corrections.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    data[wrong.strip()] = right.strip()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return f"Stemcorrectie opgeslagen: '{wrong}' → '{right}'"
+
+
 DEFINITIONS = [
     {"type": "function", "function": {"name": "read_vault", "description": "Read a file from the fractalisme vault.", "parameters": {"type": "object", "properties": {"file_name": {"type": "string", "description": "The file name (or relative path) to read from the vault."}}, "required": ["file_name"]}}},
     {"type": "function", "function": {"name": "write_vault", "description": "Write or overwrite a file in the fractalisme vault. REQUIRED: provide ev_tag (Sovereign Truth Protocol). Allowed values: #ev-direct (firsthand observation), #ev-derived (logical synthesis), #ev-reported (external source), #ev-assumed (hypothesis), #ev-luna-hypo (Luna intuition — must be confirmed before promotion to #ev-direct). Omitting ev_tag defaults to #ev-assumed with a warning.", "parameters": {"type": "object", "properties": {"file_name": {"type": "string"}, "content": {"type": "string"}, "ev_tag": {"type": "string", "enum": ["#ev-direct", "#ev-derived", "#ev-reported", "#ev-assumed", "#ev-luna-hypo"], "description": "STS evidentiality tag — provenance of the information being written."}}, "required": ["file_name", "content"]}}},
@@ -444,11 +501,13 @@ DEFINITIONS = [
     {"type": "function", "function": {"name": "read_temp", "description": "Read a transient file from .agent_temp/ (working memory).", "parameters": {"type": "object", "properties": {"file_name": {"type": "string"}}, "required": ["file_name"]}}},
     {"type": "function", "function": {"name": "cleanup_transient_data", "description": "Purge all transient working-memory files for a given agent_id from .agent_temp/.", "parameters": {"type": "object", "properties": {"agent_id": {"type": "string"}}, "required": ["agent_id"]}}},
     {"type": "function", "function": {"name": "commit_to_vault", "description": "Promote a finalized draft from .agent_temp/ to the Sovereign Vault. Provide ev_tag (STS) to stamp provenance on commit.", "parameters": {"type": "object", "properties": {"temp_file_name": {"type": "string"}, "vault_file_name": {"type": "string"}, "ev_tag": {"type": "string", "enum": ["#ev-direct", "#ev-derived", "#ev-reported", "#ev-assumed", "#ev-luna-hypo"], "description": "STS evidentiality tag — provenance of the information being committed."}}, "required": ["temp_file_name", "vault_file_name"]}}},
-    {"type": "function", "function": {"name": "list_files", "description": "Recursively list all files in a vault directory.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "list_files", "description": "Recursively list all files in a vault directory. WARNING: calling with directory='.' returns the entire vault (670KB) and will be truncated. Use list_files_paged for full traversal.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "list_files_paged", "description": "List vault files one page at a time. Safe for full-vault traversal. Returns page N (0-indexed) of page_size files, plus a header showing total count and next_page number. Use page_size=8 to stay within the 50-iteration agent budget. When next_page=DONE, all files have been processed.", "parameters": {"type": "object", "properties": {"directory": {"type": "string", "description": "Vault subdirectory to list. Empty string = entire vault."}, "page": {"type": "integer", "description": "0-indexed page number."}, "page_size": {"type": "integer", "description": "Files per page. Default 8. Max 50."}}, "required": []}}},
     {"type": "function", "function": {"name": "move_file", "description": "Move or rename a file within the vault.", "parameters": {"type": "object", "properties": {"source_path": {"type": "string"}, "destination_path": {"type": "string"}}, "required": ["source_path", "destination_path"]}}},
     {"type": "function", "function": {"name": "delete_file", "description": "Permanently delete a file from the vault.", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": ["file_path"]}}},
     {"type": "function", "function": {"name": "build_vault_map", "description": "Scan de vault en schrijf een compacte metadata-map naar .agent_temp/vault_map.json.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "max_preview_words": {"type": "integer"}}, "required": []}}},
     {"type": "function", "function": {"name": "inject_links", "description": "Injecteer [[wikilinks]] mechanisch in vault-bestanden op basis van een Link Matrix.", "parameters": {"type": "object", "properties": {"link_matrix_json": {"type": "string"}}, "required": ["link_matrix_json"]}}},
+    {"type": "function", "function": {"name": "save_voice_correction", "description": "Sla een stemherkenningscorrectie op: als Whisper een woord fout transcribeert, corrigeer het permanent. Gebruik dit als Wouter aangeeft dat je een woord verkeerd hebt verstaan.", "parameters": {"type": "object", "properties": {"wrong": {"type": "string", "description": "Het fout getranscribeerde woord of de fout getranscribeerde frase."}, "right": {"type": "string", "description": "De correcte spelling of frase zoals Wouter het bedoelde."}}, "required": ["wrong", "right"]}}},
 ]
 
 HANDLERS = {
@@ -460,8 +519,10 @@ HANDLERS = {
     "cleanup_transient_data": lambda args: cleanup_transient_data(args["agent_id"]),
     "commit_to_vault": lambda args: commit_to_vault(args["temp_file_name"], args["vault_file_name"], ev_tag=args.get("ev_tag")),
     "list_files": lambda args: list_files(args.get("directory", "")),
+    "list_files_paged": lambda args: list_files_paged(args.get("directory", ""), int(args.get("page", 0)), int(args.get("page_size", 8))),
     "move_file": lambda args: move_file(args["source_path"], args["destination_path"]),
     "delete_file": lambda args: delete_file(args["file_path"]),
     "build_vault_map": lambda args: build_vault_map(args.get("directory", ""), args.get("max_preview_words", 50)),
     "inject_links": lambda args: inject_links(args["link_matrix_json"]),
+    "save_voice_correction": lambda args: save_voice_correction(args["wrong"], args["right"]),
 }
