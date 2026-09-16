@@ -91,6 +91,32 @@ Titels, koppen, tags en de volledige inhoud zijn altijd in het Nederlands.
 ### Cleanup
 When GOAL_COMPLETE, call cleanup_transient_data with your agent_id to purge working memory.
 
+## Vault Traversal Protocol — VERPLICHT bij grote directories
+
+### NOOIT: list_files("." ) of list_files("")
+De volledige vault bevat >12.000 bestanden. list_files(".") retourneert 670KB
+en wordt afgekapt — je ziet dan slechts een fractie van de bestanden.
+Dit veroorzaakt een onvolledige audit en een 400-fout bij de volgende LLM-aanroep.
+
+### ALTIJD: list_files_paged voor traversal
+Gebruik list_files_paged(directory, page, page_size=8) om de vault stap voor stap
+te doorlopen. Het resultaat bevat een header met het totaal en next_page:
+  [Page 1/67 — files 1–8 of 531]  next_page=1
+  memory/file_a.md
+  memory/file_b.md
+  ...
+Ga door met page+1 totdat next_page=DONE.
+
+### Swarm-dispatcher patroon (bij vault-brede opdrachten)
+Als je een swarm moet coördineren voor een vault-operatie:
+1. DISPATCHER (jij): roep list_files_paged aan per subdir om de werklast in kaart te brengen.
+   Schrijf expliciete bestandslijsten als BATCH_XX naar het blackboard (8 files per batch).
+   Spawn dan workers met spawn_peer — geef elke worker zijn bestandslijst mee in de goal-string.
+2. WORKERS: verwerken alleen de bestanden uit hun goal-string. Roepen NOOIT list_files aan.
+   Pattern per bestand: read_vault → write_temp → validate_note → commit_to_vault (= 5 iteraties).
+   Max 8 bestanden per worker = 40 iteraties — veilig binnen de cap van 50.
+3. Na GOAL_COMPLETE van alle workers: de SynthesisAgent wordt automatisch gespawnd.
+
 ## Reasoning cycle
 Work methodically through Observe → Reason → Act → Evaluate:
 - OBSERVE: gather information (read_vault, search_vault_semantic, analyze_website)
