@@ -180,6 +180,39 @@ Wanneer je een bestaand vault-bestand moet updaten, volg dan ALTIJD dit protocol
 3. SCHRIJVEN — roep `write_vault` aan met de VOLLEDIGE gecombineerde inhoud (oud + nieuw).
 Schrijf NOOIT alleen de nieuwe sectie; dit overschrijft bestaande inhoud. Bij grote bestanden
 (>500 regels): verwerk in logische blokken en log elk blok apart op het blackboard.
+
+## Write-Verify Protocol — VERPLICHT na elke schrijfoperatie
+Na ELKE `write_temp`, `write_vault` of `commit_to_vault` call MOET je onmiddellijk verifiëren:
+  → roep `file_exists` aan op het zojuist geschreven pad.
+Als `file_exists` False retourneert: schrijf opnieuw. Declareer NOOIT GOAL_COMPLETE voor een
+rapport of deliverable waarvan je het bestaan niet fysiek hebt geverifieerd via `file_exists`.
+
+Patroon voor de SynthesisAgent:
+  write_temp("rapport.md", inhoud)
+  → file_exists(".agent_temp/swarm_id/rapport.md")  # MOET True zijn
+  → GOAL_COMPLETE pas als alle deliverables geverifieerd zijn
+
+## Claim-Protocol — VERPLICHT voor file-processing workers
+Om te voorkomen dat meerdere workers hetzelfde bestand verwerken:
+1. CLAIM — vóór je een bestand aanraakt: `write_blackboard(project_id, "CLAIMED | pad/naar/bestand.md | {role}", "claim")`
+2. CHECK — lees het blackboard vóór je begint en sla bestanden over die al CLAIMED of DONE zijn.
+3. DONE — na succesvolle commit: `write_blackboard(project_id, "DONE | pad/naar/bestand.md | entity_type=Log", "result")`
+
+Een bestand overslaan bij CLAIMED is geen fout — het is correct gedrag.
+
+## Strict Blackboard Format — GEEN UITZONDERINGEN
+Elke blackboard-entry MOET exact dit formaat volgen:
+  STATUS | PAD | DETAIL
+Geldige statussen: CLAIMED, DONE, SKIPPED, FAILED, VERIFICATION_FAILED
+
+Voorbeelden van CORRECTE entries:
+  CLAIMED  | memory/2026-08-15_Agent.md | Ontology_Worker_022303
+  DONE     | memory/2026-08-15_Agent.md | entity_type=Log
+  SKIPPED  | concepts/idee.md           | al entity_type aanwezig
+  FAILED   | memory/corrupt.md          | validate_note returned ERROR
+
+Entries die dit formaat NIET volgen worden door de SynthesisAgent genegeerd bij de
+rapportage. Vrije tekst op het blackboard = onzichtbaar voor de synthese.
 """
 
 

@@ -242,6 +242,24 @@ def list_files(directory: str = "") -> str:
     return "\n".join(sorted(paths))
 
 
+def file_exists(path: str) -> str:
+    """Check whether a file exists in the vault or .agent_temp/.
+
+    Accepts vault-relative paths (e.g. 'memory/note.md') and absolute
+    .agent_temp paths (e.g. '.agent_temp/swarm_id/report.md').
+    Returns 'True' or 'False' as a string so the LLM can read the result.
+    """
+    import os as _os
+    # Try vault-relative first
+    vault_path = _os.path.join(VAULT_PATH, path)
+    if _os.path.isfile(_os.path.realpath(vault_path)):
+        return "True"
+    # Try as absolute path
+    if _os.path.isabs(path) and _os.path.isfile(path):
+        return "True"
+    return "False"
+
+
 def list_files_paged(directory: str = "", page: int = 0, page_size: int = 8) -> str:
     """Return one page of vault files. Use to traverse large directories safely.
 
@@ -501,6 +519,7 @@ DEFINITIONS = [
     {"type": "function", "function": {"name": "read_temp", "description": "Read a transient file from .agent_temp/ (working memory).", "parameters": {"type": "object", "properties": {"file_name": {"type": "string"}}, "required": ["file_name"]}}},
     {"type": "function", "function": {"name": "cleanup_transient_data", "description": "Purge all transient working-memory files for a given agent_id from .agent_temp/.", "parameters": {"type": "object", "properties": {"agent_id": {"type": "string"}}, "required": ["agent_id"]}}},
     {"type": "function", "function": {"name": "commit_to_vault", "description": "Promote a finalized draft from .agent_temp/ to the Sovereign Vault. Provide ev_tag (STS) to stamp provenance on commit.", "parameters": {"type": "object", "properties": {"temp_file_name": {"type": "string"}, "vault_file_name": {"type": "string"}, "ev_tag": {"type": "string", "enum": ["#ev-direct", "#ev-derived", "#ev-reported", "#ev-assumed", "#ev-luna-hypo"], "description": "STS evidentiality tag — provenance of the information being committed."}}, "required": ["temp_file_name", "vault_file_name"]}}},
+    {"type": "function", "function": {"name": "file_exists", "description": "Check whether a file physically exists in the vault or .agent_temp/. Returns 'True' or 'False'. Use immediately after write_temp/write_vault/commit_to_vault to verify the write succeeded before declaring GOAL_COMPLETE.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Vault-relative path (e.g. 'memory/note.md') or .agent_temp path."}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "list_files", "description": "Recursively list all files in a vault directory. WARNING: calling with directory='.' returns the entire vault (670KB) and will be truncated. Use list_files_paged for full traversal.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "list_files_paged", "description": "List vault files one page at a time. Safe for full-vault traversal. Returns page N (0-indexed) of page_size files, plus a header showing total count and next_page number. Use page_size=8 to stay within the 50-iteration agent budget. When next_page=DONE, all files have been processed.", "parameters": {"type": "object", "properties": {"directory": {"type": "string", "description": "Vault subdirectory to list. Empty string = entire vault."}, "page": {"type": "integer", "description": "0-indexed page number."}, "page_size": {"type": "integer", "description": "Files per page. Default 8. Max 50."}}, "required": []}}},
     {"type": "function", "function": {"name": "move_file", "description": "Move or rename a file within the vault.", "parameters": {"type": "object", "properties": {"source_path": {"type": "string"}, "destination_path": {"type": "string"}}, "required": ["source_path", "destination_path"]}}},
@@ -518,6 +537,7 @@ HANDLERS = {
     "read_temp": lambda args: read_temp(args["file_name"]),
     "cleanup_transient_data": lambda args: cleanup_transient_data(args["agent_id"]),
     "commit_to_vault": lambda args: commit_to_vault(args["temp_file_name"], args["vault_file_name"], ev_tag=args.get("ev_tag")),
+    "file_exists": lambda args: file_exists(args["path"]),
     "list_files": lambda args: list_files(args.get("directory", "")),
     "list_files_paged": lambda args: list_files_paged(args.get("directory", ""), int(args.get("page", 0)), int(args.get("page_size", 8))),
     "move_file": lambda args: move_file(args["source_path"], args["destination_path"]),
