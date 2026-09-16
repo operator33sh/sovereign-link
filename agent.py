@@ -33,6 +33,15 @@ _RETRY_CONTEXT_PREFIX = (
     "blokkade zat en probeer een alternatieve route naar het doel."
 )
 
+# Maximum concurrent LLM calls across all agents and swarms.
+# Prevents 429 rate-limit cascades when many swarm workers run in parallel.
+_LLM_MAX_CONCURRENT = int(os.environ.get("AGENT_LLM_MAX_CONCURRENT", 3))
+_LLM_SEMAPHORE = threading.Semaphore(_LLM_MAX_CONCURRENT)
+
+# Backoff settings for 429 / transient HTTP errors in _llm_call.
+_LLM_RETRY_MAX = int(os.environ.get("AGENT_LLM_RETRY_MAX", 4))
+_LLM_RETRY_BASE_DELAY = float(os.environ.get("AGENT_LLM_RETRY_BASE_DELAY", 5.0))
+
 from tools import TOOL_DEFINITIONS, AGENT_TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH, PROJECT_LOGS_PATH
 
 # Execution logs — outside the vault, never indexed or synced
@@ -226,10 +235,12 @@ class BackgroundAgent:
         self._flush_log()
 
     def _llm_call(self) -> dict:
-        """Call the LLM with the current message history and tool definitions."""
-        # Import here to avoid circular imports at module load time
+        """Call the LLM with the current message history and tool definitions.
+
+        Uses a global semaphore (_LLM_SEMAPHORE) to cap concurrent calls and
+        exponential backoff for 429 / 5xx transient errors.
+        """
         import httpx
-        import os
 
         base_url = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com")
         api_key = os.environ.get("OLLAMA_API_KEY", "")
@@ -242,10 +253,38 @@ class BackgroundAgent:
             "tools": AGENT_TOOL_DEFINITIONS,
             "stream": False,
         }
-        client = httpx.Client(base_url=base_url, headers=headers, timeout=_AGENT_LLM_TIMEOUT)
-        response = client.post("/v1/chat/completions", json=payload)
-        response.raise_for_status()
-        return response.json()
+
+        last_exc: Exception | None = None
+        for attempt in range(_LLM_RETRY_MAX):
+            with _LLM_SEMAPHORE:
+                try:
+                    client = httpx.Client(
+                        base_url=base_url, headers=headers, timeout=_AGENT_LLM_TIMEOUT
+                    )
+                    response = client.post("/v1/chat/completions", json=payload)
+                    response.raise_for_status()
+                    return response.json()
+                except httpx.HTTPStatusError as exc:
+                    last_exc = exc
+                    status = exc.response.status_code
+                    if status == 429 or status >= 500:
+                        delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "LLM call returned %s (attempt %d/%d) — retrying in %.0fs",
+                            status, attempt + 1, _LLM_RETRY_MAX, delay,
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise  # 4xx non-429 errors are not retried
+                except httpx.TransportError as exc:
+                    last_exc = exc
+                    delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "LLM transport error (attempt %d/%d) — retrying in %.0fs: %s",
+                        attempt + 1, _LLM_RETRY_MAX, delay, exc,
+                    )
+                    time.sleep(delay)
+        raise last_exc
 
     def _execute_tool_calls(self, tool_calls: list) -> list[str]:
         """Run each tool call and return formatted log entries."""
