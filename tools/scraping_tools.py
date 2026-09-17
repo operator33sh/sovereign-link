@@ -727,11 +727,21 @@ DEFINITIONS = [
 ]
 
 HANDLERS = {
-    "crawl_site_structure": lambda args: crawl_site_structure(
-        args["start_url"], args.get("max_pages", 80)
+    "crawl_site_structure": lambda args: (
+        crawl_site_structure(args["start_url"], args.get("max_pages", 80))
+        if "start_url" in args
+        else "Error: missing required argument 'start_url'"
     ),
-    "scrape_page_full": lambda args: scrape_page_full(args["url"]),
-    "batch_extract_content": lambda args: batch_extract_content(args["url_list_json"]),
+    "scrape_page_full": lambda args: (
+        scrape_page_full(args["url"])
+        if "url" in args
+        else "Error: missing required argument 'url'"
+    ),
+    "batch_extract_content": lambda args: (
+        batch_extract_content(args["url_list_json"])
+        if "url_list_json" in args
+        else "Error: missing required argument 'url_list_json'"
+    ),
     "generate_knowledge_graph": lambda args: generate_knowledge_graph(
         args.get("data_source", "")
     ),
