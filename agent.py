@@ -42,7 +42,7 @@ _LLM_SEMAPHORE = threading.Semaphore(_LLM_MAX_CONCURRENT)
 _LLM_RETRY_MAX = int(os.environ.get("AGENT_LLM_RETRY_MAX", 4))
 _LLM_RETRY_BASE_DELAY = float(os.environ.get("AGENT_LLM_RETRY_BASE_DELAY", 5.0))
 
-from tools import TOOL_DEFINITIONS, AGENT_TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH, PROJECT_LOGS_PATH
+from tools import TOOL_DEFINITIONS, AGENT_TOOL_DEFINITIONS, TOOL_HANDLERS, sync_vault, AGENT_TEMP_PATH, PROJECT_LOGS_PATH, write_notification
 
 # Execution logs — outside the vault, never indexed or synced
 LOGS_PATH = os.path.join(PROJECT_LOGS_PATH, "agents")
@@ -133,10 +133,21 @@ Work methodically through Observe → Reason → Act → Evaluate:
 - ACT: call the appropriate tool
 - EVALUATE: assess whether the goal has been reached
 
+## Agent Notification Protocol — VERPLICHT bij afsluiting
+Wanneer je GOAL_COMPLETE bereikt, is de **laatste tool-call vóór afsluiting** altijd `write_notification`:
+- **content:** "Agent [jouw agent_name] is voltooid. Rapport opgeslagen in [pad naar deliverable]"
+- **category:** "task"
+- **priority:** "medium"
+- **related_file:** het pad naar het gegenereerde rapport of logbestand
+
+Pas daarna declareer je GOAL_COMPLETE. De infrastructuur vuurt ook automatisch een notificatie,
+maar de jouwe is de inhoudelijk rijkste omdat jij het exacte deliverable-pad kent.
+
 When the goal is fully achieved, end your response with exactly this marker on its own line:
 GOAL_COMPLETE: <one-sentence summary of what was accomplished>
 
-Do not claim GOAL_COMPLETE until all deliverables are written and transient data is cleaned up.
+Do not claim GOAL_COMPLETE until all deliverables are written, transient data is cleaned up,
+and write_notification has been called.
 """
 
 _EVAL_PROMPT = (
@@ -410,6 +421,16 @@ class BackgroundAgent:
                 self._finalize("SUCCESS")
                 self._purge_temp()
                 sync_vault()
+                try:
+                    write_notification(
+                        content=f"Agent {self.agent_name} is voltooid. Log opgeslagen in {self.log_file}",
+                        agent_id=self.agent_name,
+                        priority="medium",
+                        category="task",
+                        related_file=self.log_file,
+                    )
+                except Exception:
+                    logger.exception("Agent %s: failed to write completion notification", self.agent_name)
                 self._notify_chat(text)
                 return text
 
@@ -426,6 +447,16 @@ class BackgroundAgent:
             f"Agent '{self.agent_name}' reached max iterations ({self.max_iterations}). "
             f"Partial log at: {self.log_file}"
         )
+        try:
+            write_notification(
+                content=f"Agent {self.agent_name} is gestopt (timeout na {self.max_iterations} iteraties). Gedeeltelijk log: {self.log_file}",
+                agent_id=self.agent_name,
+                priority="medium",
+                category="task",
+                related_file=self.log_file,
+            )
+        except Exception:
+            logger.exception("Agent %s: failed to write timeout notification", self.agent_name)
         self._notify_chat(result)
         return result
 
