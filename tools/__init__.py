@@ -41,7 +41,32 @@ from tools.scraping_tools import DEFINITIONS as _scrd, HANDLERS as _scrh
 from tools.claim_tools import DEFINITIONS as _ctd, HANDLERS as _cth
 from tools.moltbook_ignore import DEFINITIONS as _mid, HANDLERS as _mih
 
-TOOL_DEFINITIONS: list[dict] = _vd + _hd + _sd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid
+# Search tools (_sd) placed last so they survive context-window truncation.
+# Vault tools (_vd) second-to-last for the same reason.
+TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _vd + _sd
+
+_CORE_NAMES = {
+    # Vault
+    "write_vault", "read_vault", "search_vault_semantic", "search_timeline",
+    "list_files", "file_exists", "sync_vault",
+    # Notifications
+    "write_notification", "get_pending_notifications",
+    # Gmail
+    "list_messages", "send_email",
+    # Calendar
+    "list_events", "create_event",
+    # Health
+    "get_steps", "get_heart_rate", "get_sleep", "get_activity_summary",
+    # Personality & scheduling
+    "update_personality", "schedule_task",
+    # Web
+    "http_request",
+}
+
+CORE_TOOL_DEFINITIONS: list[dict] = [
+    t for t in TOOL_DEFINITIONS
+    if t.get("function", {}).get("name") in _CORE_NAMES
+]
 
 TOOL_HANDLERS: dict[str, callable] = {
     **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih,

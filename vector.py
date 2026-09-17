@@ -109,7 +109,7 @@ def random_chunk() -> str | None:
     return docs[0] if docs else None
 
 
-def search_vault_files(query: str, n_results: int = 5, path_prefix: str | None = None) -> list[str]:
+def search_vault_files(query: str, n_results: int = 3, path_prefix: str | None = None) -> list[str]:
     """Return unique file names of the most semantically related vault notes."""
     total = _collection.count()
     if total == 0:
@@ -182,7 +182,7 @@ def _build_where(date_filter: str | None, path_prefix: str | None) -> dict | Non
     return {"$and": conditions}
 
 
-def search_vault_semantic(query: str, n_results: int = 5, path_prefix: str | None = None) -> str:
+def search_vault_semantic(query: str, n_results: int = 3, path_prefix: str | None = None) -> str:
     """Semantic search returning formatted text chunks.
 
     Date-tag handling (#YYYY-MM-DD):

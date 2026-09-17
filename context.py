@@ -29,6 +29,19 @@ def _load() -> None:
     try:
         with open(HISTORY_FILE, encoding="utf-8") as f:
             messages = json.load(f)
+        # Drop leading messages until we hit a user message — orphaned
+        # assistant/tool messages at the start mean the previous session
+        # crashed mid-loop.
+        while messages and messages[0].get("role") != "user":
+            messages.pop(0)
+        # Drop any trailing assistant message that only has tool_calls
+        # (incomplete loop — no final text response was ever produced).
+        while messages and (
+            messages[-1].get("role") == "assistant"
+            and not messages[-1].get("content")
+            and messages[-1].get("tool_calls")
+        ):
+            messages.pop()
         for msg in messages:
             _history.append(msg)
         logger.info("Restored %d messages from %s", len(messages), HISTORY_FILE)
@@ -45,7 +58,7 @@ def add_message(role: str, content: str) -> None:
     _save()
 
 
-_MAX_TOOL_CONTENT = 8_000  # chars — prevents history bloat from large vault searches
+_MAX_TOOL_CONTENT = 2_500  # chars — prevents history bloat from large vault searches
 
 
 def add_tool_result(tool_call_id: str, content: str) -> None:
