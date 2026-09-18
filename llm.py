@@ -796,6 +796,14 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
         _personality.ensure_seeded()
         _personality_seeded = True
 
+    # Analyze mental state and update ACL before building system prompt,
+    # so _load_acl() picks up the steering block in this same turn.
+    try:
+        from mental_state_analyzer import analyze_and_steer
+        analyze_and_steer(user_message)
+    except Exception:
+        pass  # never let the analyzer crash the main chat flow
+
     if msg_timestamp is not None:
         ts_local = msg_timestamp.astimezone(_get_local_tz())
     else:
