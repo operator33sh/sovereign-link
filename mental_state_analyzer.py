@@ -1,8 +1,8 @@
 """
-mental_state_analyzer.py — Real-time Mental State Detection & ACL Steering
+mental_state_analyzer.py — Real-time Mental State Detection via LLM
 
-Analyzes incoming user messages to infer mental state and dynamically
-steers the Active Context Layer (ACL) and DriftGovernor accordingly.
+Analyzes incoming user messages by asking the LLM to infer mental state,
+then dynamically steers the Active Context Layer (ACL) and DriftGovernor.
 
 Phases:
     STABILISATIE  — Angst / stress / hyper-arousal gedetecteerd
@@ -15,6 +15,7 @@ Integration:
     is picked up in the same turn via _load_acl().
 """
 
+import json
 import logging
 import os
 import re
@@ -22,32 +23,34 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Literal
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 Phase = Literal["STABILISATIE", "EXPANSIE", "RECOVERY", "NEUTRAAL"]
 
-# ── Lexical signal sets ────────────────────────────────────────────────────
+# ── LLM config (mirrors llm.py env vars) ─────────────────────────────────
 
-_STRESS_TOKENS = {
-    "moet", "moeten", "urgent", "snel", "nu", "help", "angst", "bang",
-    "stress", "paniek", "fuck", "shit", "kapot", "weg", "moe", "uitgeput",
-    "stop", "klaar", "fout", "probleem", "crash", "broken", "kan niet",
-    "lukt niet", "mislukt", "gevangen", "vast", "niet meer",
-}
+_OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com")
+_OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
+_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
-_EXPANSION_TOKENS = {
-    "wil", "willen", "ontdekken", "bouwen", "creëren", "idee", "plan",
-    "strategie", "groeien", "groei", "begin", "starten", "exploreren",
-    "vision", "visie", "dromen", "mogelijk", "kans", "lanceren",
-    "architect", "systeem", "verbinden", "implementeren", "ontwerpen",
-    "uitbreiden", "nieuwe", "volgende", "fase",
-}
+_ANALYSE_SYSTEM = """\
+Je bent een subtiele observator die de mentale staat van een gebruiker analyseert
+op basis van hun bericht en interactiepatroon. Geef UITSLUITEND een geldig JSON-object
+terug — geen andere tekst, geen uitleg buiten het JSON-object.
 
-_LETHARGY_TOKENS = {
-    "meh", "laat maar", "doet er niet toe", "weet niet", "maakt niet uit",
-    "niks", "leeg", "nee", "misschien", "later", "ooit", "ach",
-    "whatever", "geen zin", "vermoeid", "slapen", "moe",
-}
+Fasen:
+- STABILISATIE: angst, stress, urgentie, hyper-arousal, overweldiging, paniek
+- EXPANSIE: flow, euforie, creatieve energie, enthousiasme, visionair denken
+- RECOVERY: lethargie, leegte, apathie, vermoeidheid, onverschilligheid, "meh"
+- NEUTRAAL: geen significant emotioneel signaal — zakelijk, functioneel, informatief
+
+Antwoord altijd met exact dit JSON-formaat (geen markdown, geen backticks):
+{"phase": "NEUTRAAL", "confidence": 0.85, "reason": "korte observatie in 1 zin"}
+"""
+
+_ANALYSE_TIMEOUT = httpx.Timeout(connect=5.0, read=20.0, write=5.0, pool=5.0)
 
 # ── Phase → ACL content ────────────────────────────────────────────────────
 
@@ -101,10 +104,9 @@ stappen aan. Vermijd overweldigende lijsten of complexe plannen.
 
 # DriftGovernor dimension deltas per fase
 _DRIFT_DELTAS: dict[str, dict[str, float]] = {
-    # L1 norms kept under D_max=0.3
-    "STABILISATIE": {"emotional_activation": +0.15, "clarity": -0.07, "groundedness": -0.07},  # L1=0.29
-    "EXPANSIE":     {"emotional_activation": +0.10, "clarity": +0.10, "groundedness": +0.00},  # L1=0.20
-    "RECOVERY":     {"emotional_activation": -0.10, "clarity": -0.09, "groundedness": -0.09},  # L1=0.28
+    "STABILISATIE": {"emotional_activation": +0.15, "clarity": -0.07, "groundedness": -0.07},
+    "EXPANSIE":     {"emotional_activation": +0.10, "clarity": +0.10, "groundedness": +0.00},
+    "RECOVERY":     {"emotional_activation": -0.10, "clarity": -0.09, "groundedness": -0.09},
 }
 
 # ── Module-level state ─────────────────────────────────────────────────────
@@ -112,6 +114,14 @@ _DRIFT_DELTAS: dict[str, dict[str, float]] = {
 _message_times: deque = deque(maxlen=10)
 _current_phase: Phase = "NEUTRAAL"
 _governor = None  # DriftGovernor instance, lazy-initialized
+
+
+def _burst_score() -> float:
+    """Burst score [0, 1]: high = many messages in short time window (2 min)."""
+    now = datetime.now(timezone.utc).timestamp()
+    _message_times.append(now)
+    recent = sum(1 for t in _message_times if now - t < 120)
+    return min(1.0, recent / 6)
 
 
 def _clear_acl_mental_state() -> None:
@@ -150,72 +160,54 @@ def _initialize_acl() -> None:
 _initialize_acl()
 
 
-# ── Analysis helpers ───────────────────────────────────────────────────────
+# ── LLM-based phase detection ─────────────────────────────────────────────
 
-def _score_message(text: str) -> tuple[float, float, float]:
-    """Return (stress_score, expansion_score, lethargy_score) as raw token ratios."""
-    words = re.findall(r"\w+", text.lower())
-    if not words:
-        return 0.0, 0.0, 0.0
-    n = len(words)
-    stress = sum(1 for w in words if w in _STRESS_TOKENS) / n
-    expansion = sum(1 for w in words if w in _EXPANSION_TOKENS) / n
-    lethargy = sum(1 for w in words if w in _LETHARGY_TOKENS) / n
-    return stress, expansion, lethargy
+def _call_llm(user_message: str, burst: float) -> dict:
+    """Call the LLM and return the raw parsed JSON dict, or raise on failure."""
+    burst_note = ""
+    if burst > 0.5:
+        burst_note = f"\n[Context: hoge berichtenfrequentie gedetecteerd — burst_score={burst:.2f}]"
 
-
-def _syntactic_features(text: str) -> dict:
-    """Extract syntactic signals: sentence length, word count, exclamation density."""
-    sentences = [s.strip() for s in re.split(r"[.!?\n]+", text) if s.strip()]
-    avg_len = (sum(len(s) for s in sentences) / len(sentences)) if sentences else 0
-    return {
-        "avg_sentence_length": avg_len,
-        "word_count": len(text.split()),
-        "exclamation_density": text.count("!") / max(1, len(sentences)),
+    payload = {
+        "model": _MODEL,
+        "messages": [
+            {"role": "system", "content": _ANALYSE_SYSTEM},
+            {"role": "user", "content": user_message + burst_note},
+        ],
+        "stream": False,
+        "max_tokens": 80,
+        "options": {"num_ctx": 2048, "temperature": 0.1},
     }
-
-
-def _rhythm_score() -> float:
-    """Burst score [0, 1]: high = many messages in short time window (2 min)."""
-    now = datetime.now(timezone.utc).timestamp()
-    _message_times.append(now)
-    recent = sum(1 for t in _message_times if now - t < 120)
-    return min(1.0, recent / 6)  # 6+ messages in 2 min = max burst
+    headers = {"Authorization": f"Bearer {_OLLAMA_API_KEY}"} if _OLLAMA_API_KEY else {}
+    client = httpx.Client(base_url=_OLLAMA_BASE_URL, headers=headers, timeout=_ANALYSE_TIMEOUT)
+    response = client.post("/v1/chat/completions", json=payload)
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"]["content"].strip()
+    # Strip markdown fences if model wraps output anyway
+    content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.DOTALL).strip()
+    return json.loads(content)
 
 
 def detect_phase(user_message: str) -> tuple[Phase, float]:
-    """Analyze user_message. Return (phase, confidence) where confidence is 0–1."""
-    stress, expansion, lethargy = _score_message(user_message)
-    syntax = _syntactic_features(user_message)
-    burst = _rhythm_score()
+    """Analyze user_message via LLM. Return (phase, confidence) where confidence is 0–1.
 
-    # Syntactic stress signals — only amplify if there is already lexical stress
-    syntactic_stress = 0.0
-    if stress > 0 and syntax["avg_sentence_length"] < 20 and syntax["word_count"] < 10:
-        syntactic_stress += 0.15
-    if syntax["exclamation_density"] > 0.5:
-        syntactic_stress += 0.10
-
-    # Syntactic expansion signals (long flowing sentences)
-    syntactic_expansion = 0.10 if syntax["avg_sentence_length"] > 60 else 0.0
-
-    # Burst only amplifies an existing stress signal, never creates one from scratch
-    burst_bonus = (burst * 0.2) if stress > 0 else 0.0
-
-    combined: dict[str, float] = {
-        "STABILISATIE": stress + syntactic_stress + burst_bonus,
-        "EXPANSIE":     expansion + syntactic_expansion,
-        "RECOVERY":     lethargy,
-    }
-
-    best: Phase = max(combined, key=combined.get)  # type: ignore[arg-type]
-    confidence = combined[best]
-
-    THRESHOLD = 0.12
-    if confidence < THRESHOLD:
-        return "NEUTRAAL", confidence
-
-    return best, min(1.0, confidence)
+    Falls back to NEUTRAAL on any error so the main chat loop is never blocked.
+    """
+    burst = _burst_score()
+    try:
+        result = _call_llm(user_message, burst)
+        phase_raw = str(result.get("phase", "NEUTRAAL")).upper()
+        phase: Phase = phase_raw if phase_raw in ("STABILISATIE", "EXPANSIE", "RECOVERY", "NEUTRAAL") else "NEUTRAAL"
+        confidence = float(result.get("confidence", 0.0))
+        reason = result.get("reason", "")
+        logger.debug(
+            "mental_state_analyzer: LLM → phase=%s confidence=%.2f reason=%s",
+            phase, confidence, reason,
+        )
+        return phase, min(1.0, confidence)
+    except Exception as exc:
+        logger.warning("mental_state_analyzer: LLM call failed — %s", exc)
+        return "NEUTRAAL", 0.0
 
 
 # ── ACL update ─────────────────────────────────────────────────────────────
@@ -232,7 +224,6 @@ def _update_acl(phase: Phase) -> None:
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     new_block = template.format(timestamp=timestamp)
 
-    # Load existing ACL and strip the old mental-state section
     existing = ""
     try:
         with open(acl_path, "r", encoding="utf-8") as f:
@@ -330,7 +321,7 @@ def _notify_phase_change(old_phase: Phase, new_phase: Phase, confidence: float) 
 # ── Public API ─────────────────────────────────────────────────────────────
 
 def analyze_and_steer(user_message: str) -> Phase:
-    """Analyze *user_message*, update DriftGovernor and ACL if phase changed.
+    """Analyze *user_message* via LLM, update DriftGovernor and ACL if phase changed.
 
     Returns the detected phase. Safe to call from llm.run() — never raises.
     Only acts on a phase *change* to prevent redundant ACL writes.
