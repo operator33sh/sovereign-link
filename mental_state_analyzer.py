@@ -21,13 +21,30 @@ import os
 import re
 from collections import deque
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 Phase = Literal["STABILISATIE", "EXPANSIE", "RECOVERY", "NEUTRAAL"]
+
+# ── Trend-analysis constants ────────────────────────────────────────────────
+
+# How many recent detections to consider for trend analysis
+_TREND_WINDOW: int = 10
+
+# Phase must appear at least this many times in the window to be structural
+_STABILITY_THRESHOLD: int = 3
+
+# Phase must make up at least this fraction of the window
+_DOMINANCE_RATIO: float = 0.4
+
+
+class _Detection(NamedTuple):
+    ts: float        # UTC unix timestamp
+    phase: Phase
+    confidence: float
 
 # ── LLM config (mirrors llm.py env vars) ─────────────────────────────────
 
@@ -112,7 +129,9 @@ _DRIFT_DELTAS: dict[str, dict[str, float]] = {
 # ── Module-level state ─────────────────────────────────────────────────────
 
 _message_times: deque = deque(maxlen=10)
-_current_phase: Phase = "NEUTRAAL"
+_current_phase: Phase = "NEUTRAAL"   # last raw LLM detection
+_acl_phase: Phase = "NEUTRAAL"       # phase currently written to ACL
+_phase_history: deque[_Detection] = deque(maxlen=50)  # rolling detection log
 _governor = None  # DriftGovernor instance, lazy-initialized
 
 
@@ -122,6 +141,67 @@ def _burst_score() -> float:
     _message_times.append(now)
     recent = sum(1 for t in _message_times if now - t < 120)
     return min(1.0, recent / 6)
+
+
+def _compute_trend_phase() -> Phase | None:
+    """Return the structurally dominant phase in the recent window, or None.
+
+    Returns None when the history is too short or no phase clears both the
+    count threshold (_STABILITY_THRESHOLD) and the dominance ratio
+    (_DOMINANCE_RATIO), meaning the current pattern is too noisy to justify
+    an ACL update.
+    """
+    window = list(_phase_history)[-_TREND_WINDOW:]
+    if len(window) < _STABILITY_THRESHOLD:
+        return None
+
+    counts: dict[str, int] = {}
+    for det in window:
+        counts[det.phase] = counts.get(det.phase, 0) + 1
+
+    dominant_phase, dominant_count = max(counts.items(), key=lambda x: x[1])
+    ratio = dominant_count / len(window)
+
+    if dominant_count >= _STABILITY_THRESHOLD and ratio >= _DOMINANCE_RATIO:
+        return dominant_phase  # type: ignore[return-value]
+    return None
+
+
+def _is_structural_shift(candidate: Phase) -> bool:
+    """Validate whether *candidate* is a structural trend or a temporary spike.
+
+    A shift is structural when _compute_trend_phase() agrees with candidate,
+    meaning it already passed the count + ratio thresholds.
+    """
+    return _compute_trend_phase() == candidate
+
+
+def _log_trend(phase: Phase, confidence: float, reason: str, structural: bool) -> None:
+    """Append a detection entry to .runtime/mental_state_trends.md."""
+    try:
+        from tools.vault import RUNTIME_PATH
+        trends_path = os.path.join(RUNTIME_PATH, "mental_state_trends.md")
+        os.makedirs(RUNTIME_PATH, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        verdict = "STRUCTUREEL" if structural else "tijdelijk"
+        entry = (
+            f"| {timestamp} | {phase} | {confidence:.2f} | {verdict} | {reason} |\n"
+        )
+
+        if not os.path.exists(trends_path):
+            header = (
+                "# Mentale Staat Trend Log\n\n"
+                "| Tijdstip | Fase | Confidence | Verdict | Reden |\n"
+                "|----------|------|------------|---------|-------|\n"
+            )
+            with open(trends_path, "w", encoding="utf-8") as f:
+                f.write(header)
+
+        with open(trends_path, "a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception as exc:
+        logger.warning("mental_state_analyzer: trend log write failed — %s", exc)
 
 
 def _clear_acl_mental_state() -> None:
@@ -162,18 +242,32 @@ _initialize_acl()
 
 # ── LLM-based phase detection ─────────────────────────────────────────────
 
-def _call_llm(user_message: str, burst: float) -> dict:
+def _call_llm(user_message: str, burst: float, history: list | None = None) -> dict:
     """Call the LLM and return the raw parsed JSON dict, or raise on failure."""
     burst_note = ""
     if burst > 0.5:
         burst_note = f"\n[Context: hoge berichtenfrequentie gedetecteerd — burst_score={burst:.2f}]"
 
+    if history:
+        # Use last 10 messages from history (already includes current message).
+        # Filter out entries without a plain string content (e.g. tool_calls).
+        chat_messages = [
+            {"role": m["role"], "content": m["content"]}
+            for m in history
+            if isinstance(m.get("content"), str)
+        ][-10:]
+        # Append burst note to last user message if needed.
+        if burst_note and chat_messages and chat_messages[-1]["role"] == "user":
+            chat_messages[-1] = {
+                **chat_messages[-1],
+                "content": chat_messages[-1]["content"] + burst_note,
+            }
+    else:
+        chat_messages = [{"role": "user", "content": user_message + burst_note}]
+
     payload = {
         "model": _MODEL,
-        "messages": [
-            {"role": "system", "content": _ANALYSE_SYSTEM},
-            {"role": "user", "content": user_message + burst_note},
-        ],
+        "messages": [{"role": "system", "content": _ANALYSE_SYSTEM}] + chat_messages,
         "stream": False,
         "max_tokens": 80,
         "options": {"num_ctx": 2048, "temperature": 0.1},
@@ -188,14 +282,14 @@ def _call_llm(user_message: str, burst: float) -> dict:
     return json.loads(content)
 
 
-def detect_phase(user_message: str) -> tuple[Phase, float]:
-    """Analyze user_message via LLM. Return (phase, confidence) where confidence is 0–1.
+def detect_phase(user_message: str, history: list | None = None) -> tuple[Phase, float, str]:
+    """Analyze user_message via LLM. Return (phase, confidence, reason).
 
     Falls back to NEUTRAAL on any error so the main chat loop is never blocked.
     """
     burst = _burst_score()
     try:
-        result = _call_llm(user_message, burst)
+        result = _call_llm(user_message, burst, history=history)
         phase_raw = str(result.get("phase", "NEUTRAAL")).upper()
         phase: Phase = phase_raw if phase_raw in ("STABILISATIE", "EXPANSIE", "RECOVERY", "NEUTRAAL") else "NEUTRAAL"
         confidence = float(result.get("confidence", 0.0))
@@ -204,10 +298,10 @@ def detect_phase(user_message: str) -> tuple[Phase, float]:
             "mental_state_analyzer: LLM → phase=%s confidence=%.2f reason=%s",
             phase, confidence, reason,
         )
-        return phase, min(1.0, confidence)
+        return phase, min(1.0, confidence), reason
     except Exception as exc:
         logger.warning("mental_state_analyzer: LLM call failed — %s", exc)
-        return "NEUTRAAL", 0.0
+        return "NEUTRAAL", 0.0, "LLM error"
 
 
 # ── ACL update ─────────────────────────────────────────────────────────────
@@ -320,32 +414,72 @@ def _notify_phase_change(old_phase: Phase, new_phase: Phase, confidence: float) 
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
-def analyze_and_steer(user_message: str) -> Phase:
-    """Analyze *user_message* via LLM, update DriftGovernor and ACL if phase changed.
+def analyze_and_steer(user_message: str, history: list | None = None) -> Phase:
+    """Analyze *user_message* via LLM, update DriftGovernor and ACL on structural shifts.
 
-    Returns the detected phase. Safe to call from llm.run() — never raises.
-    Only acts on a phase *change* to prevent redundant ACL writes.
+    Returns the raw detected phase. Safe to call from llm.run() — never raises.
+
+    ACL updates are gated by trend analysis:
+    - Every detection is appended to _phase_history and logged to the trends file.
+    - _compute_trend_phase() determines whether a phase is structurally dominant
+      (must appear >= _STABILITY_THRESHOLD times, >= _DOMINANCE_RATIO of window).
+    - The ACL (_acl_phase) is only updated when the trend phase differs from the
+      currently active ACL phase, preventing jitter from momentary fluctuations.
     """
-    global _current_phase
+    global _current_phase, _acl_phase
 
-    phase, confidence = detect_phase(user_message)
+    phase, confidence, reason = detect_phase(user_message, history=history)
 
-    if phase == _current_phase:
+    # 1. Record detection in rolling history
+    _phase_history.append(_Detection(
+        ts=datetime.now(timezone.utc).timestamp(),
+        phase=phase,
+        confidence=confidence,
+    ))
+    _current_phase = phase
+
+    # 2. Compute structural trend
+    trend_phase = _compute_trend_phase()
+    structural = trend_phase == phase
+
+    # 3. Log every detection with its verdict
+    try:
+        log_reason = reason or f"raw={phase}"
+        if trend_phase and trend_phase != phase:
+            log_reason += f" (trend={trend_phase})"
+        _log_trend(phase, confidence, log_reason, structural)
+    except Exception:
+        pass
+
+    # 4. Validate: only act when trend_phase is determined and differs from ACL
+    if trend_phase is None:
+        logger.debug(
+            "mental_state_analyzer: insufficient trend data — ACL unchanged (raw=%s)", phase
+        )
         return phase
 
+    if trend_phase == _acl_phase:
+        logger.debug(
+            "mental_state_analyzer: trend=%s already matches ACL — no update", trend_phase
+        )
+        return phase
+
+    # 5. Structural shift confirmed — update DriftGovernor and ACL
     logger.info(
-        "mental_state_analyzer: %s → %s (confidence=%.2f)",
-        _current_phase, phase, confidence,
+        "mental_state_analyzer: structural shift %s → %s (window dominant=%.0f%%)",
+        _acl_phase, trend_phase,
+        sum(1 for d in list(_phase_history)[-_TREND_WINDOW:] if d.phase == trend_phase)
+        / min(len(_phase_history), _TREND_WINDOW) * 100,
     )
 
-    if phase == "NEUTRAAL":
+    if trend_phase == "NEUTRAAL":
         _clear_acl_mental_state()
     else:
-        _feed_governor(phase)
-        _update_acl(phase)
+        _feed_governor(trend_phase)
+        _update_acl(trend_phase)
 
-    _notify_phase_change(_current_phase, phase, confidence)
-    _current_phase = phase
+    _notify_phase_change(_acl_phase, trend_phase, confidence)
+    _acl_phase = trend_phase
 
     return phase
 
