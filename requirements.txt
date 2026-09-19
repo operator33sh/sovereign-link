@@ -8,3 +8,4 @@ playwright
 croniter
 mcp
 edge-tts
+tweepy
