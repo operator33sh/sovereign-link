@@ -148,6 +148,14 @@ GOAL_COMPLETE: <one-sentence summary of what was accomplished>
 
 Do not claim GOAL_COMPLETE until all deliverables are written, transient data is cleaned up,
 and write_notification has been called.
+
+## Action Fusion — Efficiënte Tool-Uitvoering
+Wanneer je meerdere gerelateerde tool-calls moet doen, geef ze allemaal terug in ÉÉN
+LLM-response als een lijst van parallel_tool_calls:
+- Lees-operaties (read_vault, search_vault_semantic, list_files_paged) → altijd bundelen
+- Schrijf-operaties die onafhankelijk zijn van elkaars resultaat → tegelijk uitvoeren
+- Vermijd één-voor-één sequential tool calls die als batch kunnen worden uitgegeven
+Doel: minimaliseer het aantal LLM round-trips door gerelateerde acties te fuseren.
 """
 
 _EVAL_PROMPT = (
@@ -333,6 +341,7 @@ class BackgroundAgent:
     def _execute_tool_calls(self, tool_calls: list) -> list[str]:
         """Run each tool call and return formatted log entries."""
         log_entries = []
+        raw_results: list[str] = []
         for tc in tool_calls:
             fn_name = tc["function"]["name"]
             try:
@@ -376,6 +385,17 @@ class BackgroundAgent:
                 "tool_call_id": tc["id"],
                 "content": content_for_llm,
             })
+            raw_results.append(result_str)
+
+        # ObservationPack: synthesize multiple tool results into one summary message
+        if len(tool_calls) > 1:
+            try:
+                from sol_patterns import pack_observations
+                pack = pack_observations(tool_calls, raw_results)
+                if pack:
+                    self._messages.append({"role": "user", "content": pack})
+            except Exception:
+                pass
 
         return log_entries
 
@@ -389,7 +409,28 @@ class BackgroundAgent:
         Assumes self._messages is already initialised with system prompt and goal.
         Returns a human-readable result string.
         """
+        # Online Context Compact threshold — ~200k chars ≈ 57k tokens, well under Ollama num_ctx
+        _AGENT_CONTEXT_CAP = 200_000
+
         for iteration in range(1, self.max_iterations + 1):
+            # Online Context Compact: compress agent messages when context grows too large
+            total_chars = sum(
+                len(str(m.get("content") or "") + str(m.get("tool_calls") or ""))
+                for m in self._messages
+            )
+            if total_chars > _AGENT_CONTEXT_CAP:
+                try:
+                    from sol_patterns import compact_context
+                    keep = max(6, len([m for m in self._messages if m.get("role") != "system"]) // 2)
+                    self._messages, block = compact_context(self._messages, keep_count=keep)
+                    if block:
+                        logger.warning(
+                            "Agent '%s' context compacted at iteration %d (~%d chars)",
+                            self.agent_name, iteration, total_chars,
+                        )
+                except Exception:
+                    pass
+
             self._append_log(
                 f"ITERATION {iteration} — OBSERVE / REASON",
                 "Calling LLM to determine next action…",

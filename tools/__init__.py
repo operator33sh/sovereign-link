@@ -42,10 +42,11 @@ from tools.claim_tools import DEFINITIONS as _ctd, HANDLERS as _cth
 from tools.moltbook_ignore import DEFINITIONS as _mid, HANDLERS as _mih
 from tools.mental_state_tools import DEFINITIONS as _mntd, HANDLERS as _mnth
 from tools.twitter import DEFINITIONS as _twd, HANDLERS as _twh
+from tools.soul_tools import DEFINITIONS as _sld, HANDLERS as _slh
 
 # Search tools (_sd) placed last so they survive context-window truncation.
 # Vault tools (_vd) second-to-last for the same reason.
-TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _mntd + _twd + _vd + _sd
+TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _mntd + _twd + _sld + _vd + _sd
 
 _CORE_NAMES = {
     # Vault
@@ -73,7 +74,7 @@ CORE_TOOL_DEFINITIONS: list[dict] = [
 ]
 
 TOOL_HANDLERS: dict[str, callable] = {
-    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_mnth, **_twh,
+    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_mnth, **_twh, **_slh,
 }
 
 # Sub-agents do not get write_vault — they must use write_temp → commit_to_vault

@@ -63,7 +63,11 @@ _MAX_TOOL_CONTENT = 2_500  # chars — prevents history bloat from large vault s
 
 def add_tool_result(tool_call_id: str, content: str) -> None:
     if len(content) > _MAX_TOOL_CONTENT:
-        content = content[:_MAX_TOOL_CONTENT] + "\n[…gekort]"
+        try:
+            from sol_patterns import evidence_preserving_truncate
+            content = evidence_preserving_truncate(content, _MAX_TOOL_CONTENT)
+        except Exception:
+            content = content[:_MAX_TOOL_CONTENT] + "\n[…gekort]"
     _history.append({"role": "tool", "tool_call_id": tool_call_id, "content": content, "timestamp": _now()})
     _save()
 

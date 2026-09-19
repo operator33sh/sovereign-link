@@ -208,6 +208,34 @@ def _load_acl() -> str:
     return ""
 
 
+_SOUL_PATH = os.path.join(os.path.dirname(__file__), "SOUL.md")
+
+
+def _load_soul() -> str:
+    """Load SOUL.md — Luna's persistent cognitive architecture — from the project root.
+
+    Returns a formatted high-priority section, or "" if the file is missing/empty.
+    Injected into _build_system_prompt() before the ACL so the operational mechanisms
+    are always active regardless of vault state.
+    """
+    try:
+        with open(_SOUL_PATH, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            return (
+                "\n\n---\n\n"
+                "## Cognitieve Architectuur (SOUL.md) — Hoog-Prioriteit\n\n"
+                "De volgende mechanismen definiëren Luna's operationele gedrag. "
+                "Ze hebben voorrang op generieke gedragingen.\n\n"
+                + content
+            )
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return ""
+
+
 _NIGHT_MODE_ADDENDUM = """
 ---
 
@@ -278,6 +306,7 @@ def _build_system_prompt() -> str:
             + "\n\n---\n\n"
             + _VAULT_PROMPT
             + _SCRAPING_PROTOCOL
+            + _load_soul()
             + _load_acl()
             + _load_moltbook_credentials()
         )
@@ -409,6 +438,7 @@ def _run_tool_loop(messages: list, max_iter: int = 20, cancel_event: threading.E
             tool_calls = message["tool_calls"]
             context.add_assistant_with_tool_calls(tool_calls)
             messages.append({"role": "assistant", "tool_calls": tool_calls})
+            _tc_results: list[str] = []
             for tc in tool_calls:
                 fn_name = tc["function"]["name"]
                 try:
@@ -421,11 +451,25 @@ def _run_tool_loop(messages: list, max_iter: int = 20, cancel_event: threading.E
                 except Exception as _tool_exc:
                     logger.exception("Tool handler '%s' raised unexpectedly: %s", fn_name, _tool_exc)
                     result = f"Error: tool '{fn_name}' failed — {_tool_exc}"
-                # Truncate before storing so context never balloons from large payloads
+                # Evidence-Preserving Reducer: truncate but keep sources/dates/IDs
                 if isinstance(result, str) and len(result) > _TOOL_RESULT_CAP:
-                    result = result[:_TOOL_RESULT_CAP] + "\n[…output truncated]"
+                    try:
+                        from sol_patterns import evidence_preserving_truncate
+                        result = evidence_preserving_truncate(result, _TOOL_RESULT_CAP)
+                    except Exception:
+                        result = result[:_TOOL_RESULT_CAP] + "\n[…output truncated]"
                 context.add_tool_result(tc["id"], result)
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                _tc_results.append(str(result))
+            # ObservationPack: synthesize multiple tool results into one summary message
+            if len(tool_calls) > 1:
+                try:
+                    from sol_patterns import pack_observations
+                    pack = pack_observations(tool_calls, _tc_results)
+                    if pack:
+                        messages.append({"role": "user", "content": pack})
+                except Exception:
+                    pass
             continue
 
         text = (message.get("content") or "").strip()
@@ -461,23 +505,32 @@ _TOOL_RESULT_CAP = 8_000  # max chars per tool result kept in history
 
 def _trim_messages(messages: list) -> list:
     """Truncate tool results and drop oldest messages to stay within context limit."""
-    # First pass: cap individual tool message content
+    # First pass: cap individual tool message content (Evidence-Preserving Reducer)
     trimmed = []
     for msg in messages:
         if msg.get("role") == "tool" and isinstance(msg.get("content"), str):
             if len(msg["content"]) > _TOOL_RESULT_CAP:
-                msg = {**msg, "content": msg["content"][:_TOOL_RESULT_CAP] + "\n[…gekort]"}
+                try:
+                    from sol_patterns import evidence_preserving_truncate
+                    msg = {**msg, "content": evidence_preserving_truncate(msg["content"], _TOOL_RESULT_CAP)}
+                except Exception:
+                    msg = {**msg, "content": msg["content"][:_TOOL_RESULT_CAP] + "\n[…gekort]"}
         trimmed.append(msg)
 
-    # Second pass: if still too large, drop oldest non-system messages (keep last 6)
+    # Second pass: Online Context Compact — if still too large, compact instead of silent drop
     total = sum(len(str(m.get("content", "") or "") + str(m.get("tool_calls", ""))) for m in trimmed)
     if total > _MAX_CHARS:
-        system = [m for m in trimmed if m.get("role") == "system"]
-        rest = [m for m in trimmed if m.get("role") != "system"]
-        # Keep the most recent messages; always keep at least the last user message
-        keep = max(6, len(rest) // 2)
-        trimmed = system + rest[-keep:]
-        logger.warning("Context trimmed: dropped %d messages (total was ~%d chars)", len(rest) - keep, total)
+        keep = max(6, len([m for m in trimmed if m.get("role") != "system"]) // 2)
+        try:
+            from sol_patterns import compact_context
+            trimmed, _ = compact_context(trimmed, keep_count=keep)
+            new_total = sum(len(str(m.get("content", "") or "")) for m in trimmed)
+            logger.warning("Context compacted: ~%d chars → ~%d chars (kept last %d non-system messages)", total, new_total, keep)
+        except Exception:
+            system = [m for m in trimmed if m.get("role") == "system"]
+            rest = [m for m in trimmed if m.get("role") != "system"]
+            trimmed = system + rest[-keep:]
+            logger.warning("Context trimmed (fallback): dropped %d messages (total was ~%d chars)", len(rest) - keep, total)
 
     return trimmed
 
