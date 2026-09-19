@@ -66,6 +66,8 @@ _CORE_NAMES = {
     "http_request",
     # X (Twitter)
     "x_post_tweet", "x_get_tweets", "x_send_dm", "x_get_dms",
+    # Cognitive architecture
+    "write_soul_md",
 }
 
 CORE_TOOL_DEFINITIONS: list[dict] = [
