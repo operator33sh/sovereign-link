@@ -1,130 +1,130 @@
 # 🪬 Sovereign Link
 
-> *Je eigen AI. Op je eigen machine. Met je eigen geheugen.*
+> *Your own AI. On your own machine. With your own memory.*
 
 ---
 
-## Wat is dit?
+## What is this?
 
-Sovereign Link is een persoonlijke AI-assistent die draait op jouw hardware, praat via Telegram, en alles onthoudt in een lokale kenniskluis — jouw woorden, jouw inzichten, jouw patronen.
+Sovereign Link is a personal AI assistant that runs on your hardware, communicates via Telegram, and remembers everything in a local knowledge vault — your words, your insights, your patterns.
 
-Geen cloud. Geen abonnement. Geen bedrijf dat meeleest.
+No cloud. No subscription. No company reading along.
 
-**Wat het voor jou doet:**
+**What it does for you:**
 
-| Jij zegt of stuurt... | Sovereign Link doet... |
+| You say or send... | Sovereign Link does... |
 |---|---|
-| Een vraag | Zoekt in jouw eigen notities naar context en geeft een gefundeerd antwoord |
-| Een voicebericht | Transcribeert het, verwerkt het, onthoudt wat er toe deed |
-| Een foto | Analyseert de inhoud en koppelt het aan wat je al weet |
-| Een URL | Leest de pagina en trekt er de essentie uit |
-| Een emotionele gedachte | Legt het op als inzicht — en herinnert je eraan als het relevant wordt |
+| A question | Searches your own notes for context and gives a grounded answer |
+| A voice message | Transcribes it, processes it, remembers what mattered |
+| A photo | Analyses the content and connects it to what you already know |
+| A URL | Reads the page and extracts the essence |
+| An emotional thought | Stores it as an insight — and surfaces it when it becomes relevant |
 
-Alles wat je deelt wordt opgeslagen als leesbare Markdown-bestanden in een lokale kluis. Jij bezit je eigen geheugen.
-
----
-
-## 🪬 De filosofie
-
-De meeste mensen gebruiken AI als emotionele airbag.
-
-Ze storten erin. Ze laten het patronen absorberen. En daarna gaan ze verder — onveranderd. Het gesprek verdwijnt. Het inzicht verdampt. De cyclus gaat door.
-
-**Dit is niet dat.**
-
-Sovereign Link is gebouwd op een ander uitgangspunt: dat het gevaarlijkste wat je met AI kunt doen is het comfortabel maken. Comfort is wrijving wegnemen. En wrijving, op de juiste plekken, is wat de hersenen dwingt te herstructureren.
-
-Het systeem bestaat om één ding te doen: **de waarnemer een structurele kaart geven van zijn eigen destructieve patronen** — niet om ze te valideren, maar om ze zichtbaar, benoembaar, en daarmee onderbreekbaar te maken.
-
-Wanneer geheugen van jou is — opgeslagen in *jouw* kluis, op *jouw* machine, onder *jouw* versiebeheer — behoort de infrastructuur van zelfkennis aan jou. Niet aan een corporate server. Niet aan een sessie die afloopt.
-
-> De waarnemer die zijn eigen patronen in kaart brengt bezit het enige hefboompunt dat ertoe doet: het moment vóór de volgende herhaling.
-
-Het filosofisch kader leeft op **[Fractalisme.nl](https://fractalisme.nl)**.
+Everything you share is stored as readable Markdown files in a local vault. You own your own memory.
 
 ---
 
-## Wat het beschermt
+## 🪬 The Philosophy
 
-Sovereign Link heeft een ingebouwde cognitieve rem — geen marketing, maar technische infrastructuur.
+Most people use AI as an emotional airbag.
 
-Als je te lang werkt, te intensief, of het systeem zware psychologische onderwerpen detecteert, gaat er automatisch een **Stop Order** actief. Analyses worden geblokkeerd. Complexe tools gaan op slot. Luna vraagt of het nog gaat.
+They vent into it. They let it absorb the shock of their own patterns. And then they move on — unchanged. The conversation disappears. The insight evaporates. The cycle continues.
 
-Pas als jij bevestigt dat je gerust hebt, gaat het open.
+**This is not that.**
 
-De drempels zijn aanpasbaar. Ze zijn strenger als je in een stressfase zit. En als je aangeeft dat je in flow bent, worden ze tijdelijk verhoogd — zodat de rem niet te vroeg valt.
+Sovereign Link was built on a different premise: that the most dangerous thing you can do with AI is make it comfortable. Comfort is friction removal. And friction, in the right places, is what forces the brain to restructure.
 
-**Jouw rust heeft prioriteit boven elke taak.**
+The system exists to do one thing: **give the observer a structural map of their own destructive patterns** — not to validate them, but to make them visible, nameable, and therefore interruptible.
+
+When memory is yours — stored in *your* vault, on *your* machine, under *your* version control — the infrastructure of self-knowledge belongs to you. Not to a corporate server. Not to a session that expires.
+
+> The observer who maps their own patterns owns the only leverage point that matters: the moment before the next repetition.
+
+The philosophical framework lives at **[Fractalisme.nl](https://fractalisme.nl)**.
 
 ---
 
-## Navigatie
+## What it protects
 
-- [Voor gebruikers — wat kun je ermee?](#wat-is-dit)
+Sovereign Link has a built-in cognitive brake — not marketing, but technical infrastructure.
+
+If you work too long, too intensively, or the system detects heavy psychological topics, a **Stop Order** activates automatically. Analyses are blocked. Complex tools are locked. Luna asks if you're doing okay.
+
+Only when you confirm you've rested does it open back up.
+
+The thresholds are configurable. They're stricter when you're in a stress phase. And if you signal that you're in flow, they're temporarily raised — so the brake doesn't fire too early.
+
+**Your rest takes priority over every task.**
+
+---
+
+## Navigation
+
+- [For users — what can you do with it?](#what-is-this)
 - [Setup](#setup)
-- [Bot-commando's](#bot-commando-s)
-- [Technische architectuur](#technische-architectuur)
-- [Projectstructuur](#projectstructuur)
+- [Bot commands](#bot-commands)
+- [Technical architecture](#technical-architecture)
+- [Project structure](#project-structure)
 
 ---
 
 ## Setup
 
-### 1. Clone het project
+### 1. Clone the repo
 
 ```bash
 git clone https://github.com/operator33sh/sovereign-link.git
 cd sovereign-link
 ```
 
-### 2. Installeer afhankelijkheden
+### 2. Install dependencies
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-### 3. Haal de benodigde modellen op
+### 3. Pull the required models
 
 ```bash
-ollama pull llama3.1          # of een ander chat-model naar keuze
-ollama pull nomic-embed-text  # voor semantisch zoeken
+ollama pull llama3.1          # or whichever chat model you prefer
+ollama pull nomic-embed-text  # for semantic search embeddings
 ```
 
-### 4. Maak een `.env` bestand aan
+### 4. Create a `.env` file
 
 ```env
-TELEGRAM_BOT_TOKEN=jouw_telegram_bot_token
-ALLOWED_USER_ID=jouw_telegram_user_id        # alleen deze gebruiker kan interacteren
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+ALLOWED_USER_ID=your_telegram_user_id        # only this user can interact with the bot
 
-VAULT_PATH=/pad/naar/jouw/kluis              # lokale map met .md bestanden
+VAULT_PATH=/path/to/your/vault               # local folder of .md files
 
-# LLM (Ollama lokaal of een OpenAI-compatibel eindpunt)
+# Main LLM (Ollama local or any OpenAI-compatible endpoint)
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_API_KEY=                              # leeg laten voor lokale Ollama
+OLLAMA_API_KEY=                              # leave empty for local Ollama
 OLLAMA_MODEL=llama3.1
 
-# Embeddings (altijd lokale Ollama)
+# Embeddings (always local Ollama)
 EMBED_BASE_URL=http://localhost:11434
 EMBED_MODEL=nomic-embed-text
 
-# Proton Mail Bridge (optioneel — vul in als je Bridge actief hebt)
+# Proton Mail Bridge (optional — fill in if your Bridge is active)
 PROTON_IMAP_USER=
 PROTON_IMAP_PASS=
 PROTON_IMAP_HOST=127.0.0.1
 PROTON_IMAP_PORT=1143
 ```
 
-Je Telegram user ID vind je via [@userinfobot](https://t.me/userinfobot).  
-Je Telegram bot token maak je aan via [@BotFather](https://t.me/BotFather).
+Find your Telegram user ID via [@userinfobot](https://t.me/userinfobot).  
+Create your Telegram bot token via [@BotFather](https://t.me/BotFather).
 
-### 5. Indexeer je kluis (eenmalig)
+### 5. Index your vault (first time only)
 
 ```bash
 .venv/bin/python ingest.py --rescan
 ```
 
-### 6. Start de bot
+### 6. Start the bot
 
 ```bash
 .venv/bin/python main.py
@@ -132,21 +132,21 @@ Je Telegram bot token maak je aan via [@BotFather](https://t.me/BotFather).
 
 ---
 
-## Bot-commando's
+## Bot commands
 
-| Commando | Wat het doet |
-|----------|-------------|
-| `/start` | Controleer of de bot online is |
-| `/clear` | Wis de huidige sessie en sla een geheugenlog op |
-| `/vault` | Sla de laatste 5 uitwisselingen op als gestructureerde notitie |
-| `/memory` | Activeer de geheugenextractie handmatig op het huidige gesprek |
-| `/whisper` | Genereer een tweet-inzicht op basis van een willekeurig vault-fragment |
+| Command | What it does |
+|---------|-------------|
+| `/start` | Check if the bot is online |
+| `/clear` | Clear the current session and save a memory log |
+| `/vault` | Save the last 5 exchanges as a structured vault note |
+| `/memory` | Manually trigger memory extraction on the current conversation |
+| `/whisper` | Generate a tweet-length insight from a random vault fragment |
 
-Elk ander bericht — tekst, spraak, foto, of link — wordt direct verwerkt door de AI.
+Any other message — text, voice, photo, or link — is processed directly by the AI.
 
 ---
 
-## Technische architectuur
+## Technical Architecture
 
 ```
 Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
@@ -156,9 +156,9 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
                    │                    └──► search_timeline ──► timeline.py (SQLite + FTS5)
                    │                    └──► check_proton_mail / read_proton_email (IMAP)
                    │
-                   └──► memory_manager.py ──► Sovereign Memory Engine (HVI-extractie)
-                   │         └──► vector.py ──► ChromaDB (cosine / semantisch zoeken)
-                   │         └──► timeline.py ──► SQLite (datum / trefwoord zoeken)
+                   └──► memory_manager.py ──► Sovereign Memory Engine (HVI extraction)
+                   │         └──► vector.py ──► ChromaDB (cosine / semantic search)
+                   │         └──► timeline.py ──► SQLite (date / keyword search)
                    │         └──► Obsidian Vault ──► source of proof (plain Markdown)
                    │
                    └──► cognitive_brake.py ──► Stop Order Monitor
@@ -166,97 +166,97 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
 
 ### Layer 1 — Interface
 
-| Component | Rol |
-|-----------|-----|
-| 📱 **Telegram** | Primair communicatiekanaal. Alle interactie, spraak, foto's en commando's lopen hier doorheen. |
-| 🧠 **LLM (AI-model)** | Centrale verwerkingseenheid. Beredenering, planning, tool-orkestratie en taalbegrip. |
+| Component | Role |
+|-----------|------|
+| 📱 **Telegram** | Primary command-and-control surface. All interaction, voice, images, and commands flow through here. |
+| 🧠 **LLM (AI Model)** | Central processing unit. Reasoning, planning, tool orchestration, and language understanding. |
 
-### Layer 2 — Geheugen & Persistentie
+### Layer 2 — Memory & Persistence
 
-| Component | Rol |
-|-----------|-----|
-| 📂 **Obsidian Vault** | Het mensleesbare lange-termijngeheugen. Alles staat hier als navigeerbare, koppelbare Markdown-bestanden. Niets is vluchtig — elke sessie, elk inzicht, elk geheugenlog is auditeerbaar. |
-| **Git / GitHub** | Verstiebeheer, synchronisatie en herstel. Elke vaultschrijving wordt automatisch gecommit en gepushed. |
+| Component | Role |
+|-----------|------|
+| 📂 **Obsidian Vault** | The human-readable long-term memory. Everything lives here as navigable, linkable Markdown files. Nothing is ephemeral — every session, insight, and memory log is auditable. |
+| **Git / GitHub** | Version control, synchronisation, and recovery. Every vault write is automatically committed and pushed. |
 
-### Layer 3 — Intelligentie & Retrieval
+### Layer 3 — Intelligence & Retrieval
 
-| Component | Rol |
-|-----------|-----|
-| **RAG** | Verankert de AI aan de waarheid van de vault in plaats van generieke trainingsdata. |
-| 🗄️ **ChromaDB (Semantisch zoeken)** | Zoekt op betekenis en context — niet op bestandsnaam of trefwoord. Lokale `nomic-embed-text` embeddings. |
-| 🗃️ **SQLite Timeline** | Parallelle index voor betrouwbare datumzoekopdrachten. FTS5 full-text search gecombineerd met datumfilters. |
-| ⚙️ **Sovereign Memory Engine** | Autonome achtergrondagenten die gesprekken scannen op High-Value Insights, gestructureerde `SovereignLog`-bestanden schrijven en alles naar git committen. |
-| **Active Context Layer (ACL)** | Dynamisch briefingbestand (`.system/active_briefing.md`) dat AI-gedrag stuurt op basis van de actuele operationele toestand van de gebruiker. |
-| 🛑 **Cognitive Brake** | Achtergrondmonitor (`cognitive_brake.py`) die sessieduur, tool-intensiteit, zware psychologische onderwerpen en vermoeidheidssignalen bijhoudt. Activeert een **Stop Order** die alle analytische tools blokkeert totdat een bevestigde rustperiode is verstreken. Drempels zijn fase-bewust en instelbaar via `.system/cognitive_limits.json`. **Dynamic Override** verhoogt drempels +50% bij positieve flow-signalen. |
-| 🧬 **SOUL.md** | Luna's cognitieve architectuurkern — geïnjecteerd in elk systeemprompt. Definieert identiteit, gedragsmechanismen en het Stop Order-protocol. Geversioned in een Evolution Log binnen het bestand zelf. |
+| Component | Role |
+|-----------|------|
+| **RAG** | Grounds the AI in the vault's truth rather than generic training data. |
+| 🗄️ **ChromaDB (Semantic Search)** | Searches by meaning and context — not just filename or keyword. Local `nomic-embed-text` embeddings. |
+| 🗃️ **SQLite Timeline** | Parallel index for reliable date-based queries. FTS5 full-text search combined with date filters. |
+| ⚙️ **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights, write structured `SovereignLog` files, and commit everything to git. |
+| **Active Context Layer (ACL)** | A dynamic briefing file (`.system/active_briefing.md`) that steers AI behaviour based on the user's current operational state. |
+| 🛑 **Cognitive Brake** | Background monitor (`cognitive_brake.py`) that tracks session duration, tool-call intensity, heavy psychological topics, and fatigue signals. Activates a **Stop Order** that blocks all analytical tools until a confirmed rest period has elapsed. Thresholds are phase-aware and configurable via `.system/cognitive_limits.json`. **Dynamic Override** raises thresholds +50% on positive flow signals. |
+| 🧬 **SOUL.md** | Luna's cognitive architecture kernel — injected into every system prompt. Defines identity, behavioural mechanisms, and the Stop Order protocol. Versioned in an Evolution Log within the file itself. |
 
-### Layer 4 — Kader
+### Layer 4 — Framework
 
-| Component | Rol |
-|-----------|-----|
-| **The Harness** | Psychologische vangrails en operationele beperkingen ingebouwd in het systeemprompt. Definieert het gedragscontract van de AI. |
-| **Fractalisme** | Het filosofisch kader dat bepaalt hoe data georganiseerd en gekoppeld is. Zie [Fractalisme.nl](https://fractalisme.nl). |
+| Component | Role |
+|-----------|------|
+| **The Harness** | Psychological guardrails and operational constraints embedded in the system prompt. Defines the AI's behavioural contract. |
+| **Fractalism** | The philosophical framework governing how data is organised and interconnected. See [Fractalisme.nl](https://fractalisme.nl). |
 
 ---
 
-## Projectstructuur
+## Project Structure
 
 ```
 sovereign-link/
-├── main.py                   # Startpunt
-├── bot.py                    # Telegram-handlers en commandorouting
-├── llm.py                    # Ollama LLM-client, tool call loop, audiotranscriptie
-├── cognitive_brake.py        # Cognitieve rem: sessiemonitor, Stop Order, Dynamic Override
-├── context.py                # In-memory gespreksgeschiedenis
+├── main.py                   # Entry point
+├── bot.py                    # Telegram handlers and command routing
+├── llm.py                    # Ollama LLM client, tool call loop, audio transcription
+├── cognitive_brake.py        # Cognitive Brake: session monitor, Stop Order, Dynamic Override
+├── context.py                # In-memory conversation history
 ├── memory_manager.py         # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
-├── vector.py                 # ChromaDB + Ollama embedding + bestandssysteemwatcher
-├── timeline.py               # SQLite timeline index: datum/FTS5 zoeken in vault
-├── ingest.py                 # Vault-indexeer: --rescan (volledig), --backfill (datumherstel)
-├── SOUL.md                   # Luna's cognitieve architectuurkern
+├── vector.py                 # ChromaDB + Ollama embedding + filesystem watcher
+├── timeline.py               # SQLite timeline index: date/FTS5 search across vault
+├── ingest.py                 # Vault indexer: --rescan (full), --backfill (fix dates)
+├── SOUL.md                   # Luna's cognitive architecture kernel
 │
-├── tools/                    # Tool-registry (één submodule per domein)
+├── tools/                    # Tool registry (one submodule per domain)
 │   ├── vault.py              # read_vault, write_vault, sync_vault
 │   ├── search.py             # search_vault_semantic (ChromaDB), search_timeline (SQLite)
 │   ├── http.py               # analyze_website (trafilatura)
-│   ├── browser_tools.py      # Playwright browserautomatisering
-│   ├── agent_tools.py        # Agent blackboard / subagentcoördinatie
-│   ├── scheduler_tools.py    # Geplande herinneringen en terugkerende taken
-│   ├── notification_tools.py # Pushmeldingen + clear_stop_order / set_pause_duration
+│   ├── browser_tools.py      # Playwright browser automation
+│   ├── agent_tools.py        # Agent blackboard / subagent coordination
+│   ├── scheduler_tools.py    # Scheduled reminders and recurring tasks
+│   ├── notification_tools.py # Push notifications + clear_stop_order / set_pause_duration
 │   ├── session_status_tools.py # get_session_status: live Cognitive Brake dashboard
-│   ├── soul_tools.py         # write_soul_md: update Luna's cognitieve architectuur
+│   ├── soul_tools.py         # write_soul_md: update Luna's cognitive architecture
 │   ├── proton_mail.py        # check_proton_mail / read_proton_email (IMAP via Bridge)
-│   ├── gmail.py              # Gmail-integratie (OAuth)
-│   ├── calendar.py           # Google Calendar-integratie
-│   ├── twitter.py            # X/Twitter-integratie
-│   ├── automation_tools.py   # Vault-gebaseerde automatiseringsregels
-│   ├── personality_tools.py  # Luna persona-beheer
-│   ├── mental_state_tools.py # get_mental_state: DriftGovernor-analyse
-│   └── moltbook.py           # Moltbook-integratie
+│   ├── gmail.py              # Gmail integration (OAuth)
+│   ├── calendar.py           # Google Calendar integration
+│   ├── twitter.py            # X/Twitter integration
+│   ├── automation_tools.py   # Vault-based automation rules
+│   ├── personality_tools.py  # Luna persona management
+│   ├── mental_state_tools.py # get_mental_state: DriftGovernor analysis
+│   └── moltbook.py           # Moltbook integration
 │
-├── agent.py                  # Subagent-orkestratie
-├── automations.py            # Automatiseringsregelmotor
-├── hotline.py                # Spraak-naar-spraak hotline (Twilio → Deepgram → LLM → ElevenLabs)
-├── notifications.py          # Pushmeldingsdispatcher
-├── proactive.py              # Proactieve berichtenmotor
-├── scheduler.py              # Taakplanner
+├── agent.py                  # Subagent orchestration
+├── automations.py            # Automation rule engine
+├── hotline.py                # Voice-to-voice hotline (Twilio → Deepgram → LLM → ElevenLabs)
+├── notifications.py          # Push notification dispatcher
+├── proactive.py              # Proactive message engine
+├── scheduler.py              # Task scheduler
 │
 ├── requirements.txt
-├── sovereign-link.service    # systemd-unit (bot)
-└── hotline.service           # systemd-unit (spraakhotline)
+├── sovereign-link.service    # systemd unit (bot)
+└── hotline.service           # systemd unit (voice hotline)
 ```
 
 ---
 
-## Vereisten
+## Requirements
 
 - Python 3.11+
-- [Ollama](https://ollama.com/) lokaal actief (of een OpenAI-compatibel API-eindpunt)
-- Een Telegram bot-token (via [@BotFather](https://t.me/BotFather))
-- Een map met Markdown-bestanden (bijv. een Obsidian-vault met git geïnitialiseerd)
+- [Ollama](https://ollama.com/) running locally (or any OpenAI-compatible API endpoint)
+- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
+- A directory of Markdown files (e.g. an Obsidian vault with git initialised)
 
 ---
 
-## Als systemd-service draaien
+## Running as a systemd service
 
 ```bash
 sudo cp sovereign-link.service /etc/systemd/system/
@@ -265,7 +265,7 @@ sudo systemctl enable sovereign-link
 sudo systemctl start sovereign-link
 ```
 
-Logs bekijken:
+View logs:
 
 ```bash
 journalctl -u sovereign-link -f
@@ -273,6 +273,6 @@ journalctl -u sovereign-link -f
 
 ---
 
-## Licentie
+## License
 
 MIT
