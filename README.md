@@ -1,174 +1,130 @@
-# Sovereign-Link
+# 🪬 Sovereign Link
 
-> **Sovereign-Link is not a chatbot. It is a Sovereign Memory Engine.**
-
----
-
-## The Vision
-
-Most people use AI as an emotional airbag.
-
-They vent into it. They ask it to reassure them. They let it absorb the shock of their own patterns — and then they move on, unchanged. The conversation disappears. The insight evaporates. The cycle continues.
-
-**This is not that.**
-
-Sovereign-Link was built on a different premise: that the most dangerous thing you can do with AI is make it comfortable. Comfort is friction removal. And friction, in the right places, is what forces the brain to restructure.
-
-The tool exists to do one thing: **give the observer a structural map of their own destructive patterns** — not to validate them, but to make them visible, nameable, and therefore interruptible.
-
-This is AI as **architecture for recovery and autonomy**. Not a mirror that flatters. A blueprint that reveals.
-
-When memory is owned — when insights are stored in *your* vault, on *your* machine, under *your* version control — the infrastructure of self-knowledge belongs to you. Not to a corporate server. Not to a session that expires. To you.
-
-That is what *Sovereign Memory* means.
-
-> The observer who maps their own patterns owns the only leverage point that matters: the moment before the next repetition.
-
-This project is the technical harness for that process. The philosophical framework lives at **[Fractalisme.nl](https://fractalisme.nl)**.
+> *Je eigen AI. Op je eigen machine. Met je eigen geheugen.*
 
 ---
 
-## What It Is
+## Wat is dit?
 
-A private Telegram bot that gives you conversational access to your local [Obsidian](https://obsidian.md/) vault (or any folder of Markdown files). Runs entirely on your own machine — no data leaves your infrastructure.
+Sovereign Link is een persoonlijke AI-assistent die draait op jouw hardware, praat via Telegram, en alles onthoudt in een lokale kenniskluis — jouw woorden, jouw inzichten, jouw patronen.
+
+Geen cloud. Geen abonnement. Geen bedrijf dat meeleest.
+
+**Wat het voor jou doet:**
+
+| Jij zegt of stuurt... | Sovereign Link doet... |
+|---|---|
+| Een vraag | Zoekt in jouw eigen notities naar context en geeft een gefundeerd antwoord |
+| Een voicebericht | Transcribeert het, verwerkt het, onthoudt wat er toe deed |
+| Een foto | Analyseert de inhoud en koppelt het aan wat je al weet |
+| Een URL | Leest de pagina en trekt er de essentie uit |
+| Een emotionele gedachte | Legt het op als inzicht — en herinnert je eraan als het relevant wordt |
+
+Alles wat je deelt wordt opgeslagen als leesbare Markdown-bestanden in een lokale kluis. Jij bezit je eigen geheugen.
 
 ---
 
-## Navigation
+## 🪬 De filosofie
 
-- [Features](#features)
-- [Architecture](#architecture)
-- [Requirements](#requirements)
+De meeste mensen gebruiken AI als emotionele airbag.
+
+Ze storten erin. Ze laten het patronen absorberen. En daarna gaan ze verder — onveranderd. Het gesprek verdwijnt. Het inzicht verdampt. De cyclus gaat door.
+
+**Dit is niet dat.**
+
+Sovereign Link is gebouwd op een ander uitgangspunt: dat het gevaarlijkste wat je met AI kunt doen is het comfortabel maken. Comfort is wrijving wegnemen. En wrijving, op de juiste plekken, is wat de hersenen dwingt te herstructureren.
+
+Het systeem bestaat om één ding te doen: **de waarnemer een structurele kaart geven van zijn eigen destructieve patronen** — niet om ze te valideren, maar om ze zichtbaar, benoembaar, en daarmee onderbreekbaar te maken.
+
+Wanneer geheugen van jou is — opgeslagen in *jouw* kluis, op *jouw* machine, onder *jouw* versiebeheer — behoort de infrastructuur van zelfkennis aan jou. Niet aan een corporate server. Niet aan een sessie die afloopt.
+
+> De waarnemer die zijn eigen patronen in kaart brengt bezit het enige hefboompunt dat ertoe doet: het moment vóór de volgende herhaling.
+
+Het filosofisch kader leeft op **[Fractalisme.nl](https://fractalisme.nl)**.
+
+---
+
+## Wat het beschermt
+
+Sovereign Link heeft een ingebouwde cognitieve rem — geen marketing, maar technische infrastructuur.
+
+Als je te lang werkt, te intensief, of het systeem zware psychologische onderwerpen detecteert, gaat er automatisch een **Stop Order** actief. Analyses worden geblokkeerd. Complexe tools gaan op slot. Luna vraagt of het nog gaat.
+
+Pas als jij bevestigt dat je gerust hebt, gaat het open.
+
+De drempels zijn aanpasbaar. Ze zijn strenger als je in een stressfase zit. En als je aangeeft dat je in flow bent, worden ze tijdelijk verhoogd — zodat de rem niet te vroeg valt.
+
+**Jouw rust heeft prioriteit boven elke taak.**
+
+---
+
+## Navigatie
+
+- [Voor gebruikers — wat kun je ermee?](#wat-is-dit)
 - [Setup](#setup)
-- [Running as a systemd service](#running-as-a-systemd-service)
-- [Bot commands](#bot-commands)
-- [Sovereign Memory Engine](#sovereign-memory-engine)
-- [Technical Architecture: The Four Layers](#technical-architecture-the-sovereign-memory-system)
-- [Project structure](#project-structure)
-
----
-
-## Features
-
-- **Chat with your vault** — ask questions, get summaries, or search by meaning across all your notes
-- **Semantic search (RAG)** — `nomic-embed-text` embeddings + ChromaDB find relevant fragments by context, not just filenames
-- **Timeline search (SQL)** — SQLite index with FTS5 enables fast date-based and keyword search across sessions and memory logs; the LLM can query "what happened on date X" with precision
-- **Read & write notes** — the AI can read existing vault files or create new ones on your behalf
-- **Obsidian vault as source of proof** — all insights, sessions, and memory logs are written as plain Markdown in your local vault; nothing is ephemeral and everything is auditable
-- **Sovereign Memory Engine** — automatically extracts High-Value Insights (HVIs) from conversations and saves them as structured `SovereignLog` files in the vault; relevant past memories are injected into the system prompt at session start
-- **Memory continuity** — memory is extracted automatically every 20 messages, on `/clear`, and on bot shutdown so nothing is ever lost
-- **Vault watcher** — a background filesystem observer auto-indexes any `.md` file written to the vault outside of the bot (e.g. from Obsidian directly)
-- **Voice transcription** — send voice messages or audio files; transcribed locally using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) before being sent to the LLM
-- **Voice-to-voice hotline** — optional Twilio integration (`hotline.py`) streams phone calls through Deepgram STT → LLM → ElevenLabs TTS in real time
-- **Image understanding** — send photos with an optional caption; the LLM analyses them inline
-- **Website analysis** — share a URL and the bot fetches and extracts the page content (via trafilatura) for summarisation or saving
-- **Vault snapshots** — `/vault` summarises the last 5 exchanges and saves a structured note with wikilinks to related files
-- **Git sync** — all vault writes are committed and pushed automatically
-- **Cognitive Brake** — a background monitor tracks session duration, complex tool calls, heavy psychological topics, and cognitive fatigue signals; automatically pushes wellness notifications and activates a Stop Order that blocks analytical tasks until a confirmed rest period has elapsed; thresholds are phase-aware and configurable in `.system/cognitive_limits.json`
-- **SOUL.md — Cognitive Architecture** — Luna's persistent identity, behavioral mechanisms, and Stop Order protocol are defined in `SOUL.md` and injected into every system prompt; updated via `write_soul_md` and versioned in an Evolution Log
-- **Fully local & private** — LLM, embeddings, transcription, and vector DB all run on your own hardware; optionally point the main LLM at a cloud provider via `OLLAMA_BASE_URL`/`OLLAMA_API_KEY`
-
----
-
-## Architecture
-
-```
-Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
-                   │         └──► tools/ ──► read_vault / write_vault / sync_vault
-                   │                    └──► analyze_website (trafilatura)
-                   │                    └──► search_vault_semantic ──► vector.py (ChromaDB)
-                   │                    └──► search_timeline ──► timeline.py (SQLite + FTS5)
-                   │
-                   └──► memory_manager.py ──► Sovereign Memory Engine (HVI extraction)
-                             └──► vector.py ──► ChromaDB (cosine / semantic search)
-                             └──► timeline.py ──► SQLite (date / keyword search)
-                             └──► Obsidian Vault ──► source of proof (plain Markdown)
-```
-
----
-
-## Requirements
-
-- Python 3.11+
-- [Ollama](https://ollama.com/) running locally (or any OpenAI-compatible API endpoint)
-- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- A vault directory of Markdown files (e.g. an Obsidian vault with git initialised)
+- [Bot-commando's](#bot-commando-s)
+- [Technische architectuur](#technische-architectuur)
+- [Projectstructuur](#projectstructuur)
 
 ---
 
 ## Setup
 
-### 1. Clone the repo
+### 1. Clone het project
 
 ```bash
 git clone https://github.com/operator33sh/sovereign-link.git
 cd sovereign-link
 ```
 
-### 2. Create a virtual environment and install dependencies
+### 2. Installeer afhankelijkheden
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-### 3. Pull the required Ollama models
+### 3. Haal de benodigde modellen op
 
 ```bash
-ollama pull llama3.1          # or whichever chat model you prefer
-ollama pull nomic-embed-text  # for semantic search embeddings
+ollama pull llama3.1          # of een ander chat-model naar keuze
+ollama pull nomic-embed-text  # voor semantisch zoeken
 ```
 
-### 4. Configure environment variables
-
-Create a `.env` file in the project root:
+### 4. Maak een `.env` bestand aan
 
 ```env
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-ALLOWED_USER_ID=your_telegram_user_id        # only this user can interact with the bot
+TELEGRAM_BOT_TOKEN=jouw_telegram_bot_token
+ALLOWED_USER_ID=jouw_telegram_user_id        # alleen deze gebruiker kan interacteren
 
-VAULT_PATH=/path/to/your/vault               # local folder of .md files
+VAULT_PATH=/pad/naar/jouw/kluis              # lokale map met .md bestanden
 
-# Main LLM (can be Ollama or any OpenAI-compatible endpoint)
+# LLM (Ollama lokaal of een OpenAI-compatibel eindpunt)
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_API_KEY=                              # leave empty for local Ollama
+OLLAMA_API_KEY=                              # leeg laten voor lokale Ollama
 OLLAMA_MODEL=llama3.1
 
-# Embeddings (always local Ollama)
+# Embeddings (altijd lokale Ollama)
 EMBED_BASE_URL=http://localhost:11434
 EMBED_MODEL=nomic-embed-text
-CHROMA_PATH=~/.sovereign-link/chroma         # where ChromaDB stores its index
-TIMELINE_DB=~/.sovereign-link/timeline.db   # SQLite timeline index (date + FTS search)
 
-# Vision model — optional, defaults to OLLAMA_MODEL
-# VISION_MODEL=llava                         # any vision-capable model (llava, qwen3-vl, etc.)
-
-# Voice transcription — optional, defaults shown
-# WHISPER_MODEL=small                        # tiny / base / small / medium / large
-
-# Custom system prompt — optional
-# SYSTEM_PROMPT=You are a personal assistant...
+# Proton Mail Bridge (optioneel — vul in als je Bridge actief hebt)
+PROTON_IMAP_USER=
+PROTON_IMAP_PASS=
+PROTON_IMAP_HOST=127.0.0.1
+PROTON_IMAP_PORT=1143
 ```
 
-To find your Telegram user ID, message [@userinfobot](https://t.me/userinfobot).
+Je Telegram user ID vind je via [@userinfobot](https://t.me/userinfobot).  
+Je Telegram bot token maak je aan via [@BotFather](https://t.me/BotFather).
 
-### 5. Index your vault (first time only)
+### 5. Indexeer je kluis (eenmalig)
 
-**Full rescan — ChromaDB semantic index + SQLite timeline index:**
 ```bash
 .venv/bin/python ingest.py --rescan
 ```
 
-This populates both indexes in one pass. Re-run after adding many files outside of the bot. Files written via the bot are indexed automatically.
-
-**Fix timeline dates (after migrations or sync issues):**
-```bash
-.venv/bin/python ingest.py --backfill
-```
-
-Scans `#YYYY-MM-DD` tags in note content and corrects any entries where the stored date is wrong (e.g. caused by filesystem date drift during a git sync).
-
-### 6. Run the bot
+### 6. Start de bot
 
 ```bash
 .venv/bin/python main.py
@@ -176,9 +132,131 @@ Scans `#YYYY-MM-DD` tags in note content and corrects any entries where the stor
 
 ---
 
-## Running as a systemd service
+## Bot-commando's
 
-A service unit file is included. To install it:
+| Commando | Wat het doet |
+|----------|-------------|
+| `/start` | Controleer of de bot online is |
+| `/clear` | Wis de huidige sessie en sla een geheugenlog op |
+| `/vault` | Sla de laatste 5 uitwisselingen op als gestructureerde notitie |
+| `/memory` | Activeer de geheugenextractie handmatig op het huidige gesprek |
+| `/whisper` | Genereer een tweet-inzicht op basis van een willekeurig vault-fragment |
+
+Elk ander bericht — tekst, spraak, foto, of link — wordt direct verwerkt door de AI.
+
+---
+
+## Technische architectuur
+
+```
+Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
+                   │         └──► tools/ ──► read_vault / write_vault / sync_vault
+                   │                    └──► analyze_website (trafilatura)
+                   │                    └──► search_vault_semantic ──► vector.py (ChromaDB)
+                   │                    └──► search_timeline ──► timeline.py (SQLite + FTS5)
+                   │                    └──► check_proton_mail / read_proton_email (IMAP)
+                   │
+                   └──► memory_manager.py ──► Sovereign Memory Engine (HVI-extractie)
+                   │         └──► vector.py ──► ChromaDB (cosine / semantisch zoeken)
+                   │         └──► timeline.py ──► SQLite (datum / trefwoord zoeken)
+                   │         └──► Obsidian Vault ──► source of proof (plain Markdown)
+                   │
+                   └──► cognitive_brake.py ──► Stop Order Monitor
+```
+
+### Layer 1 — Interface
+
+| Component | Rol |
+|-----------|-----|
+| 📱 **Telegram** | Primair communicatiekanaal. Alle interactie, spraak, foto's en commando's lopen hier doorheen. |
+| 🧠 **LLM (AI-model)** | Centrale verwerkingseenheid. Beredenering, planning, tool-orkestratie en taalbegrip. |
+
+### Layer 2 — Geheugen & Persistentie
+
+| Component | Rol |
+|-----------|-----|
+| 📂 **Obsidian Vault** | Het mensleesbare lange-termijngeheugen. Alles staat hier als navigeerbare, koppelbare Markdown-bestanden. Niets is vluchtig — elke sessie, elk inzicht, elk geheugenlog is auditeerbaar. |
+| **Git / GitHub** | Verstiebeheer, synchronisatie en herstel. Elke vaultschrijving wordt automatisch gecommit en gepushed. |
+
+### Layer 3 — Intelligentie & Retrieval
+
+| Component | Rol |
+|-----------|-----|
+| **RAG** | Verankert de AI aan de waarheid van de vault in plaats van generieke trainingsdata. |
+| 🗄️ **ChromaDB (Semantisch zoeken)** | Zoekt op betekenis en context — niet op bestandsnaam of trefwoord. Lokale `nomic-embed-text` embeddings. |
+| 🗃️ **SQLite Timeline** | Parallelle index voor betrouwbare datumzoekopdrachten. FTS5 full-text search gecombineerd met datumfilters. |
+| ⚙️ **Sovereign Memory Engine** | Autonome achtergrondagenten die gesprekken scannen op High-Value Insights, gestructureerde `SovereignLog`-bestanden schrijven en alles naar git committen. |
+| **Active Context Layer (ACL)** | Dynamisch briefingbestand (`.system/active_briefing.md`) dat AI-gedrag stuurt op basis van de actuele operationele toestand van de gebruiker. |
+| 🛑 **Cognitive Brake** | Achtergrondmonitor (`cognitive_brake.py`) die sessieduur, tool-intensiteit, zware psychologische onderwerpen en vermoeidheidssignalen bijhoudt. Activeert een **Stop Order** die alle analytische tools blokkeert totdat een bevestigde rustperiode is verstreken. Drempels zijn fase-bewust en instelbaar via `.system/cognitive_limits.json`. **Dynamic Override** verhoogt drempels +50% bij positieve flow-signalen. |
+| 🧬 **SOUL.md** | Luna's cognitieve architectuurkern — geïnjecteerd in elk systeemprompt. Definieert identiteit, gedragsmechanismen en het Stop Order-protocol. Geversioned in een Evolution Log binnen het bestand zelf. |
+
+### Layer 4 — Kader
+
+| Component | Rol |
+|-----------|-----|
+| **The Harness** | Psychologische vangrails en operationele beperkingen ingebouwd in het systeemprompt. Definieert het gedragscontract van de AI. |
+| **Fractalisme** | Het filosofisch kader dat bepaalt hoe data georganiseerd en gekoppeld is. Zie [Fractalisme.nl](https://fractalisme.nl). |
+
+---
+
+## Projectstructuur
+
+```
+sovereign-link/
+├── main.py                   # Startpunt
+├── bot.py                    # Telegram-handlers en commandorouting
+├── llm.py                    # Ollama LLM-client, tool call loop, audiotranscriptie
+├── cognitive_brake.py        # Cognitieve rem: sessiemonitor, Stop Order, Dynamic Override
+├── context.py                # In-memory gespreksgeschiedenis
+├── memory_manager.py         # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
+├── vector.py                 # ChromaDB + Ollama embedding + bestandssysteemwatcher
+├── timeline.py               # SQLite timeline index: datum/FTS5 zoeken in vault
+├── ingest.py                 # Vault-indexeer: --rescan (volledig), --backfill (datumherstel)
+├── SOUL.md                   # Luna's cognitieve architectuurkern
+│
+├── tools/                    # Tool-registry (één submodule per domein)
+│   ├── vault.py              # read_vault, write_vault, sync_vault
+│   ├── search.py             # search_vault_semantic (ChromaDB), search_timeline (SQLite)
+│   ├── http.py               # analyze_website (trafilatura)
+│   ├── browser_tools.py      # Playwright browserautomatisering
+│   ├── agent_tools.py        # Agent blackboard / subagentcoördinatie
+│   ├── scheduler_tools.py    # Geplande herinneringen en terugkerende taken
+│   ├── notification_tools.py # Pushmeldingen + clear_stop_order / set_pause_duration
+│   ├── session_status_tools.py # get_session_status: live Cognitive Brake dashboard
+│   ├── soul_tools.py         # write_soul_md: update Luna's cognitieve architectuur
+│   ├── proton_mail.py        # check_proton_mail / read_proton_email (IMAP via Bridge)
+│   ├── gmail.py              # Gmail-integratie (OAuth)
+│   ├── calendar.py           # Google Calendar-integratie
+│   ├── twitter.py            # X/Twitter-integratie
+│   ├── automation_tools.py   # Vault-gebaseerde automatiseringsregels
+│   ├── personality_tools.py  # Luna persona-beheer
+│   ├── mental_state_tools.py # get_mental_state: DriftGovernor-analyse
+│   └── moltbook.py           # Moltbook-integratie
+│
+├── agent.py                  # Subagent-orkestratie
+├── automations.py            # Automatiseringsregelmotor
+├── hotline.py                # Spraak-naar-spraak hotline (Twilio → Deepgram → LLM → ElevenLabs)
+├── notifications.py          # Pushmeldingsdispatcher
+├── proactive.py              # Proactieve berichtenmotor
+├── scheduler.py              # Taakplanner
+│
+├── requirements.txt
+├── sovereign-link.service    # systemd-unit (bot)
+└── hotline.service           # systemd-unit (spraakhotline)
+```
+
+---
+
+## Vereisten
+
+- Python 3.11+
+- [Ollama](https://ollama.com/) lokaal actief (of een OpenAI-compatibel API-eindpunt)
+- Een Telegram bot-token (via [@BotFather](https://t.me/BotFather))
+- Een map met Markdown-bestanden (bijv. een Obsidian-vault met git geïnitialiseerd)
+
+---
+
+## Als systemd-service draaien
 
 ```bash
 sudo cp sovereign-link.service /etc/systemd/system/
@@ -187,7 +265,7 @@ sudo systemctl enable sovereign-link
 sudo systemctl start sovereign-link
 ```
 
-Check logs with:
+Logs bekijken:
 
 ```bash
 journalctl -u sovereign-link -f
@@ -195,153 +273,6 @@ journalctl -u sovereign-link -f
 
 ---
 
-## Bot commands
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Check if the bot is online |
-| `/clear` | Clear the current session context and save a memory log |
-| `/vault` | Summarise the last 5 exchanges as a structured vault note and push to git |
-| `/memory` | Manually trigger the Sovereign Memory Engine on the current conversation |
-| `/whisper` | Generate a tweet-length insight from a random vault fragment |
-
-Any other text message is handled by the LLM with access to all tools. Voice messages and photos are also supported directly.
-
----
-
-## Sovereign Memory Engine
-
-The memory engine runs as part of the bot (no separate process needed). It:
-
-1. Scans the conversation for High-Value Insights — psychological breakthroughs, redefined values, recurring patterns, or architectural decisions
-2. Searches the vault for related prior memory logs to build associative `[[wikilinks]]`
-3. Writes a structured `SovereignLog` file to `memory/YYYY-MM-DD_TOPIC_SovereignLog.md`
-4. Commits and pushes the result to git
-
-Memory is triggered automatically every 20 messages, on `/clear`, and on bot shutdown. At the start of each new session the top 3 most relevant past memory logs are injected into the system prompt.
-
----
-
-## Technical Architecture: The Sovereign Memory System
-
-```mermaid
-flowchart LR
-    TG["📱 Telegram\n(Command & Control)"]
-    LLM["🧠 AI Model\n(LLM)"]
-    SME["⚙️ Sovereign Memory Engine\n(Background Agents)"]
-    VDB["🗄️ ChromaDB\n(Semantic Search)"]
-    TL["🗃️ SQLite Timeline\n(Date & Keyword Search)"]
-    OV["📂 Obsidian Vault\n(Source of Proof)"]
-
-    TG -->|user input| LLM
-    LLM <-->|RAG · tool calls| SME
-    SME <-->|embed · cosine retrieve| VDB
-    SME <-->|date · FTS5 retrieve| TL
-    SME <-->|read · write · commit| OV
-    VDB -.->|backed by| OV
-    TL -.->|backed by| OV
-    LLM -->|response| TG
-```
-
-### Layer 1 — Interface
-
-| Component | Role |
-|-----------|------|
-| 📱 **Telegram** | Primary command-and-control surface. All real-time interaction, voice, images, and commands flow through this interface. |
-| 🧠 **LLM (AI Model)** | Central processing unit. Handles reasoning, planning, tool orchestration, and natural language understanding across all domains. |
-
-### Layer 2 — Memory & Persistence
-
-| Component | Role |
-|-----------|------|
-| 📂 **Obsidian Vault** | The human-readable interface to long-term memory and the **source of proof**. All structured knowledge lives here as navigable, linkable Markdown notes. Nothing is ephemeral — every session, insight, and memory log is auditable. |
-| **Markdown** | The universal, future-proof data format. Plain text with `[[wikilinks]]` ensures portability across any tool or era. |
-| **Git / GitHub** | The backbone for version control, multi-device synchronization, and disaster recovery. Every vault write is committed and pushed automatically. |
-
-### Layer 3 — Intelligence & Retrieval (The Core)
-
-| Component | Role |
-|-----------|------|
-| **RAG** | Grounds the AI in the Vault's truth rather than generic training data. Relevant fragments are retrieved and injected into context before every response. |
-| 🗄️ **ChromaDB (Semantic Search)** | Enables search by meaning and context — not just filename or keyword match. Powered by `nomic-embed-text` embeddings running locally. Used for topic-based queries: "what do I know about X?" |
-| 🗃️ **SQLite Timeline Index (Temporal Search)** | A parallel index alongside ChromaDB for reliable date-based queries. Stores every vault file with extracted date, time, and session ID. Supports FTS5 full-text search combined with date filters. Used when the LLM needs to answer "what happened on date X?" — something vector search cannot do reliably. DB at `~/.sovereign-link/timeline.db`. |
-| ⚙️ **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights (HVIs), synthesize structured `SovereignLog` files, build associative `[[wikilinks]]` to prior memory, and commit everything to git — automatically and continuously. |
-| **Active Context Layer (ACL)** | A high-priority briefing file (`.system/active_briefing.md`) that dynamically steers AI behavior based on the user's current operational state, priorities, and active focus areas. Loaded at session start to orient every interaction. |
-| 🛑 **Cognitive Brake** | A background safety monitor (`cognitive_brake.py`) that tracks session duration, complex tool-call density, heavy psychological topics, and fatigue signals. Pushes `wellness` notifications before overload and activates a **Stop Order** that blocks all analytical tool calls until a confirmed rest period elapses. Thresholds are phase-aware (stricter in STABILISATIE/RECOVERY) and configurable via `.system/cognitive_limits.json` in the vault. A **Dynamic Override** raises thresholds +50% when the user signals positive flow, inserting a soft check-in instead of a hard stop. |
-| 🧬 **SOUL.md — Cognitive Architecture** | Luna's persistent operational kernel (`SOUL.md`) injected into every system prompt. Defines identity, reasoning cycle, behavioral mechanisms, and the Stop Order protocol. Updated via `write_soul_md` and versioned in an Evolution Log within the file itself. |
-
-### Layer 4 — Framework
-
-| Component | Role |
-|-----------|------|
-| **The Harness** | A systemic set of psychological guardrails and operational constraints embedded in the system prompt. Defines the AI's behavioral contract, boundaries, and tone. |
-| **Fractalism** | The philosophical framework governing how data is organized and interconnected. Notes relate to other notes in self-similar, recursive patterns — mirroring how understanding actually develops. See [Fractalisme.nl](https://fractalisme.nl). |
-
-### Data Flow
-
-1. A message arrives via **Telegram** and is passed to the 🧠 **LLM**.
-2. The LLM issues tool calls to retrieve context:
-   - **`search_vault_semantic`** → 🗄️ **ChromaDB** for topic/meaning-based queries
-   - **`search_timeline`** → 🗃️ **SQLite Timeline** for date- or keyword-filtered queries
-3. Retrieved context is injected into the LLM's reasoning window alongside the **ACL briefing**.
-4. The LLM formulates a response and may invoke write tools — creating or updating 📂 **Markdown** notes in the **Obsidian Vault** (the source of proof).
-5. Every vault write is automatically indexed into both ChromaDB and the SQLite timeline, then committed via **Git** and pushed to **GitHub**.
-6. Every 20 messages (and on `/clear` or shutdown), the Sovereign Memory Engine extracts HVIs, writes a `SovereignLog`, and pushes it — ensuring no insight is ever lost.
-
----
-
-## Project structure
-
-```
-sovereign-link/
-├── main.py                   # Entry point
-├── bot.py                    # Telegram handlers and command routing
-├── llm.py                    # Ollama LLM client, tool call loop, audio transcription
-├── cognitive_brake.py        # Cognitive Brake: session monitor, Stop Order, Dynamic Override
-├── context.py                # In-memory conversation history
-├── memory_manager.py         # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
-├── vector.py                 # ChromaDB + Ollama embedding logic + filesystem watcher
-├── timeline.py               # SQLite timeline index: date/FTS5 search across vault
-├── ingest.py                 # Vault indexer: --rescan (full), --backfill (fix dates)
-├── SOUL.md                   # Luna's cognitive architecture kernel (injected into every prompt)
-│
-├── tools/                    # Tool registry (one submodule per domain)
-│   ├── vault.py              # read_vault, write_vault, sync_vault
-│   ├── search.py             # search_vault_semantic (ChromaDB), search_timeline (SQLite)
-│   ├── http.py               # analyze_website (trafilatura)
-│   ├── browser_tools.py      # Playwright browser automation
-│   ├── agent_tools.py        # Agent blackboard / subagent coordination
-│   ├── scheduler_tools.py    # Scheduled reminders and recurring tasks
-│   ├── notification_tools.py # Push notifications + clear_stop_order / set_pause_duration
-│   ├── session_status_tools.py # get_session_status: live Cognitive Brake dashboard
-│   ├── soul_tools.py         # write_soul_md: update Luna's cognitive architecture
-│   ├── automation_tools.py   # Vault-based automation rules
-│   ├── personality_tools.py  # Luna persona management
-│   ├── mental_state_tools.py # get_mental_state: DriftGovernor analysis
-│   └── moltbook.py           # Moltbook integration
-│
-├── agent.py                  # Subagent orchestration
-├── automations.py            # Automation rule engine
-├── browser.py                # Playwright browser session manager
-├── chat_bridge.py            # Cross-channel message bridge
-├── hotline.py                # Voice-to-voice hotline (Twilio → Deepgram → LLM → ElevenLabs)
-├── notifications.py          # Push notification dispatcher
-├── personality.py            # Luna persona loader
-├── proactive.py              # Proactive message engine
-├── scheduler.py              # Task scheduler
-├── session_logger.py         # Structured session logging
-├── timezone_manager.py       # Timezone detection and handling
-├── vault_analyzer.py         # Vault usage and growth statistics
-├── vault_migrate.py          # Vault migration utilities
-├── luna_persona.md           # Luna's persona definition
-│
-├── requirements.txt
-├── sovereign-link.service    # systemd unit (bot)
-└── hotline.service           # systemd unit (voice hotline)
-```
-
----
-
-## License
+## Licentie
 
 MIT
