@@ -5,6 +5,7 @@ Communicates only with the local playerctl daemon (no network).
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -12,6 +13,46 @@ import subprocess
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _dbus_env() -> dict[str, str]:
+    """Return an environment dict with DBUS_SESSION_BUS_ADDRESS resolved.
+
+    When the bot runs as a systemd service it has no D-Bus session address.
+    We probe the most common locations so playerctl can reach the user's
+    running media player without needing a display.
+    """
+    env = os.environ.copy()
+
+    # Already set — nothing to do
+    if env.get("DBUS_SESSION_BUS_ADDRESS"):
+        return env
+
+    # systemd user bus socket (most modern distros)
+    uid = os.getuid()
+    socket_path = f"/run/user/{uid}/bus"
+    if os.path.exists(socket_path):
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={socket_path}"
+        return env
+
+    # Fallback: scan /proc for a running process that has the variable set
+    try:
+        for pid_entry in os.listdir("/proc"):
+            if not pid_entry.isdigit():
+                continue
+            environ_file = f"/proc/{pid_entry}/environ"
+            try:
+                with open(environ_file, "rb") as f:
+                    for item in f.read().split(b"\x00"):
+                        if item.startswith(b"DBUS_SESSION_BUS_ADDRESS="):
+                            env["DBUS_SESSION_BUS_ADDRESS"] = item[len(b"DBUS_SESSION_BUS_ADDRESS="):].decode()
+                            return env
+            except (PermissionError, FileNotFoundError):
+                continue
+    except Exception:
+        pass
+
+    return env
+
 
 def _playerctl(*args: str, capture: bool = False) -> tuple[int, str]:
     """Run a playerctl command. Returns (returncode, stdout/stderr)."""
@@ -26,6 +67,7 @@ def _playerctl(*args: str, capture: bool = False) -> tuple[int, str]:
             capture_output=True,
             text=True,
             timeout=5,
+            env=_dbus_env(),
         )
         output = (result.stdout or result.stderr or "").strip()
         return result.returncode, output

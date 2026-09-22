@@ -491,6 +491,16 @@ def _push_notification(message: str) -> None:
         logger.exception("CognitiveBrake: failed to push notification")
 
 
+def _start_rest_music() -> None:
+    """Start music playback as part of the Stop Order rest protocol."""
+    try:
+        from tools.music_tools import start_music
+        result = start_music()
+        logger.info("CognitiveBrake: rest music triggered — %s", result)
+    except Exception:
+        logger.debug("CognitiveBrake: could not start rest music", exc_info=True)
+
+
 def _monitor_loop() -> None:
     """Background thread — evaluates thresholds every 60 seconds."""
     while True:
@@ -589,6 +599,7 @@ def _check_thresholds() -> None:
             f"Nieuwe analyses en complexe taken zijn tijdelijk geblokkeerd. "
             f"Neem minimaal 15 minuten rust. Zeg 'stop order vrijgeven' om verder te gaan."
         )
+        _start_rest_music()
         logger.warning(
             "CognitiveBrake: Stop Order activated (%.1f min, %d complex calls, "
             "streak=%d, heavy=%d, fatigue=%d, state=%s)",
