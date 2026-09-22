@@ -89,6 +89,16 @@ def trigger_uplift(_args: dict) -> str:
                      "Het anker dat jou altijd terugbrengt naar jezelf.")
     action   = random.choice(_MICRO_ACTIONS)
 
+    # Attempt to start music for somatic activation
+    music_status = ""
+    try:
+        from tools.music_tools import start_music
+        result = start_music()
+        if "▶" in result or "gestart" in result.lower():
+            music_status = "\n🎵 **Muziek gestart.** Laat het geluid het lichaam leiden."
+    except Exception:
+        pass
+
     return f"""🪬 **ACTIVATIEPROTOCOL — EUPHORIA ENGINE**
 
 ---
@@ -123,7 +133,7 @@ Het hoofd volgt het lichaam — niet andersom.
 
 **Micro-actie:** {action}
 
-**Anker:** {trigger}
+**Anker:** {trigger}{music_status}
 
 ---
 
