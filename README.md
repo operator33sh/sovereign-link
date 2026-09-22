@@ -64,6 +64,8 @@ A private Telegram bot that gives you conversational access to your local [Obsid
 - **Website analysis** — share a URL and the bot fetches and extracts the page content (via trafilatura) for summarisation or saving
 - **Vault snapshots** — `/vault` summarises the last 5 exchanges and saves a structured note with wikilinks to related files
 - **Git sync** — all vault writes are committed and pushed automatically
+- **Cognitive Brake** — a background monitor tracks session duration, complex tool calls, heavy psychological topics, and cognitive fatigue signals; automatically pushes wellness notifications and activates a Stop Order that blocks analytical tasks until a confirmed rest period has elapsed; thresholds are phase-aware and configurable in `.system/cognitive_limits.json`
+- **SOUL.md — Cognitive Architecture** — Luna's persistent identity, behavioral mechanisms, and Stop Order protocol are defined in `SOUL.md` and injected into every system prompt; updated via `write_soul_md` and versioned in an Evolution Log
 - **Fully local & private** — LLM, embeddings, transcription, and vector DB all run on your own hardware; optionally point the main LLM at a cloud provider via `OLLAMA_BASE_URL`/`OLLAMA_API_KEY`
 
 ---
@@ -265,6 +267,8 @@ flowchart LR
 | 🗃️ **SQLite Timeline Index (Temporal Search)** | A parallel index alongside ChromaDB for reliable date-based queries. Stores every vault file with extracted date, time, and session ID. Supports FTS5 full-text search combined with date filters. Used when the LLM needs to answer "what happened on date X?" — something vector search cannot do reliably. DB at `~/.sovereign-link/timeline.db`. |
 | ⚙️ **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights (HVIs), synthesize structured `SovereignLog` files, build associative `[[wikilinks]]` to prior memory, and commit everything to git — automatically and continuously. |
 | **Active Context Layer (ACL)** | A high-priority briefing file (`.system/active_briefing.md`) that dynamically steers AI behavior based on the user's current operational state, priorities, and active focus areas. Loaded at session start to orient every interaction. |
+| 🛑 **Cognitive Brake** | A background safety monitor (`cognitive_brake.py`) that tracks session duration, complex tool-call density, heavy psychological topics, and fatigue signals. Pushes `wellness` notifications before overload and activates a **Stop Order** that blocks all analytical tool calls until a confirmed rest period elapses. Thresholds are phase-aware (stricter in STABILISATIE/RECOVERY) and configurable via `.system/cognitive_limits.json` in the vault. A **Dynamic Override** raises thresholds +50% when the user signals positive flow, inserting a soft check-in instead of a hard stop. |
+| 🧬 **SOUL.md — Cognitive Architecture** | Luna's persistent operational kernel (`SOUL.md`) injected into every system prompt. Defines identity, reasoning cycle, behavioral mechanisms, and the Stop Order protocol. Updated via `write_soul_md` and versioned in an Evolution Log within the file itself. |
 
 ### Layer 4 — Framework
 
@@ -293,11 +297,13 @@ sovereign-link/
 ├── main.py                   # Entry point
 ├── bot.py                    # Telegram handlers and command routing
 ├── llm.py                    # Ollama LLM client, tool call loop, audio transcription
+├── cognitive_brake.py        # Cognitive Brake: session monitor, Stop Order, Dynamic Override
 ├── context.py                # In-memory conversation history
 ├── memory_manager.py         # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
 ├── vector.py                 # ChromaDB + Ollama embedding logic + filesystem watcher
 ├── timeline.py               # SQLite timeline index: date/FTS5 search across vault
 ├── ingest.py                 # Vault indexer: --rescan (full), --backfill (fix dates)
+├── SOUL.md                   # Luna's cognitive architecture kernel (injected into every prompt)
 │
 ├── tools/                    # Tool registry (one submodule per domain)
 │   ├── vault.py              # read_vault, write_vault, sync_vault
@@ -306,9 +312,12 @@ sovereign-link/
 │   ├── browser_tools.py      # Playwright browser automation
 │   ├── agent_tools.py        # Agent blackboard / subagent coordination
 │   ├── scheduler_tools.py    # Scheduled reminders and recurring tasks
-│   ├── notification_tools.py # Push notifications
+│   ├── notification_tools.py # Push notifications + clear_stop_order / set_pause_duration
+│   ├── session_status_tools.py # get_session_status: live Cognitive Brake dashboard
+│   ├── soul_tools.py         # write_soul_md: update Luna's cognitive architecture
 │   ├── automation_tools.py   # Vault-based automation rules
 │   ├── personality_tools.py  # Luna persona management
+│   ├── mental_state_tools.py # get_mental_state: DriftGovernor analysis
 │   └── moltbook.py           # Moltbook integration
 │
 ├── agent.py                  # Subagent orchestration
