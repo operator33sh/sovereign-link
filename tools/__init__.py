@@ -43,10 +43,11 @@ from tools.moltbook_ignore import DEFINITIONS as _mid, HANDLERS as _mih
 from tools.mental_state_tools import DEFINITIONS as _mntd, HANDLERS as _mnth
 from tools.twitter import DEFINITIONS as _twd, HANDLERS as _twh
 from tools.soul_tools import DEFINITIONS as _sld, HANDLERS as _slh
+from tools.session_status_tools import DEFINITIONS as _ssd, HANDLERS as _ssh
 
 # Search tools (_sd) placed last so they survive context-window truncation.
 # Vault tools (_vd) second-to-last for the same reason.
-TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _mntd + _twd + _sld + _vd + _sd
+TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _mntd + _twd + _sld + _ssd + _vd + _sd
 
 _CORE_NAMES = {
     # Vault
@@ -68,6 +69,12 @@ _CORE_NAMES = {
     "x_post_tweet", "x_get_tweets", "x_send_dm", "x_get_dms",
     # Cognitive architecture
     "write_soul_md",
+    # Cognitive brake
+    "clear_stop_order",
+    "set_pause_duration",
+    "set_session_timer",
+    # Session dashboard
+    "get_session_status",
 }
 
 CORE_TOOL_DEFINITIONS: list[dict] = [
@@ -76,7 +83,7 @@ CORE_TOOL_DEFINITIONS: list[dict] = [
 ]
 
 TOOL_HANDLERS: dict[str, callable] = {
-    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_mnth, **_twh, **_slh,
+    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_mnth, **_twh, **_slh, **_ssh,
 }
 
 # Sub-agents do not get write_vault — they must use write_temp → commit_to_vault

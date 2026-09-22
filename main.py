@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__":
     logger.info("Starting Sovereign-Link bot...")
 
+    import cognitive_brake as _cb
+    _cb.ensure_monitor_running()
+
     start_vault_watcher()
 
     # Fix for Python 3.14+ event loop issues
