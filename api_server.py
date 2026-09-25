@@ -11,6 +11,8 @@ Starten:
   .venv/bin/python api_server.py
 """
 
+import asyncio
+import json
 import logging
 import os
 import time
@@ -20,6 +22,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 load_dotenv()
@@ -83,8 +86,39 @@ def list_models():
     }
 
 
+async def _sse_stream(reply: str, model_name: str):
+    """Async generator: yields OpenAI-compatible SSE chunks with perceptual pacing."""
+    import fluidity
+
+    cid = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    created = int(time.time())
+
+    for chunk, delay in fluidity.iter_stream_chunks(reply):
+        if delay > 0:
+            await asyncio.sleep(delay)
+        data = json.dumps({
+            "id": cid,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+        })
+        yield f"data: {data}\n\n"
+
+    # Final chunk — signals stream end
+    final = json.dumps({
+        "id": cid,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model_name,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    })
+    yield f"data: {final}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 @app.post("/v1/chat/completions")
-def chat_completions(req: ChatRequest):
+async def chat_completions(req: ChatRequest):
     # Sync server context with Open WebUI's conversation history.
     # Open WebUI is the source of truth — reset and rebuild on every request
     # so stale server-side context never causes the model to go off-topic.
@@ -104,18 +138,28 @@ def chat_completions(req: ChatRequest):
     for msg in prior_messages:
         context.add_message(msg.role, msg.content)
 
+    loop = asyncio.get_event_loop()
     try:
-        reply = llm.run(user_text)
+        reply = await loop.run_in_executor(None, lambda: llm.run(user_text))
         session_logger.on_turn(context.get_history())
     except Exception as exc:
         logger.exception("llm.run() fout: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
+    model_name = os.environ.get("OLLAMA_MODEL", "sovereign-link")
+
+    if req.stream:
+        return StreamingResponse(
+            _sse_stream(reply, model_name),
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no"},
+        )
+
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": os.environ.get("OLLAMA_MODEL", "sovereign-link"),
+        "model": model_name,
         "choices": [
             {
                 "index": 0,

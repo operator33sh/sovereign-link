@@ -337,12 +337,18 @@ def _build_system_prompt() -> str:
         )
 
     try:
+        import fluidity as _fl
+        _fluidity_directive = _fl.build_system_directive()
+    except Exception:
+        _fluidity_directive = ""
+
+    try:
         from proactive import user_status
         if user_status.is_sleeping():
-            return base + _NIGHT_MODE_ADDENDUM + stop_order_block + _LANG_REMINDER
+            return base + _NIGHT_MODE_ADDENDUM + stop_order_block + _fluidity_directive + _LANG_REMINDER
     except Exception:
         pass
-    return base + stop_order_block + _LANG_REMINDER
+    return base + stop_order_block + _fluidity_directive + _LANG_REMINDER
 
 def _parse_kv_body(body: str) -> dict:
     """Parse unquoted 'key:value,key:{nested:value}' format emitted by some models."""
@@ -957,6 +963,15 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
         except Exception:
             pass  # never let memory injection crash the main chat flow
 
+    # Inject contextual rhythm hint (Mirroring Protocol)
+    try:
+        import fluidity as _fl
+        _mirror = _fl.build_mirror_hint(user_message)
+        if _mirror:
+            system_with_time = system_with_time + _mirror
+    except Exception:
+        pass
+
     messages = [{"role": "system", "content": system_with_time}] + context.get_history()
 
     result = _run_tool_loop(messages, cancel_event=cancel_event)
@@ -964,5 +979,11 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
         return "Error: tool call loop exceeded maximum iterations"
     if not result:
         logger.warning("run(): LLM produceerde lege content")
+    # Apply anti-cliché filter (Fluidity Layer post-processing)
+    try:
+        import fluidity as _fl
+        result = _fl.filter_output(result)
+    except Exception:
+        pass
     context.add_message("assistant", result)
     return result
