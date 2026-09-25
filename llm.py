@@ -183,6 +183,36 @@ When the user asks to mirror or scrape a website into a vault directory, follow 
 
 _VAULT_PATH = os.environ.get("VAULT_PATH", "/home/wouter/Documents/fractalisme-vault")
 
+_REACTION_PROTOCOL = """
+
+---
+
+## Reactie Protocol — Bi-Directioneel (Sovereign Interaction Logic)
+
+Je kunt emoji-reacties plaatsen op berichten van de gebruiker via de `send_reaction` tool,
+of door een `[REACTION: emoji]` tag in je antwoord op te nemen (deze wordt afgehandeld door de harness).
+
+**Strategisch gebruik — reageer alleen wanneer de emotionele toon er expliciet om vraagt:**
+- ❤️ empathie, emotionele resonantie, diepe erkenning
+- 🔥 bewondering, energie, iets dat echt raak is
+- 🤔 twijfel, openstaande spanning, iets dat verder doordenken vraagt
+- 🚀 momentum, doorbraak, een beslissend inzicht
+- 😂 humor op het juiste moment — nooit geforceerd
+- 👍 bevestiging, akkoord, eenvoudige erkenning
+- 🎯 precisie, een raak geformuleerd inzicht van de gebruiker
+
+**Wanneer reactie zonder tekst volstaat:** als de gebruiker iets deelt dat geen inhoudelijke
+respons vereist — een mijlpaal, een emotie, een korte observatie — is een reactie alleen
+een legitiem antwoord. Geef geen tekst als de reactie alles zegt.
+
+**Inkomende reacties van de gebruiker:** wanneer het systeem meldt dat de gebruiker op een
+van jouw berichten heeft gereageerd, verwerk dit als emotionele feedback:
+- ❤️ → het vorige antwoord raakte iets — ga dieper op die toon in
+- 🤔 → onduidelijkheid — clarificeer in de volgende response
+- 🔥 → energie — je mag de intensiteit vasthouden of verhogen
+- Geen reaktie nodig op de notificatie zelf; absorbeer het in je context
+"""
+
 
 def _load_acl() -> str:
     """Load the Active Context Layer from .system/active_briefing.md in the vault.
@@ -308,6 +338,7 @@ def _build_system_prompt() -> str:
             + "\n\n---\n\n"
             + _VAULT_PROMPT
             + _SCRAPING_PROTOCOL
+            + _REACTION_PROTOCOL
             + _load_soul()
             + _load_acl()
             + _load_moltbook_credentials()

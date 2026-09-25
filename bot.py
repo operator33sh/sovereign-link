@@ -12,8 +12,8 @@ load_dotenv()
 
 AUDIO_TMP_DIR = "/tmp/audio_transcription"
 
-from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, BotCommand, ReactionTypeEmoji
+from telegram.ext import Application, CommandHandler, MessageHandler, MessageReactionHandler, filters, ContextTypes
 
 import context
 import llm
@@ -22,6 +22,7 @@ from tools import write_vault, sync_vault, generate_time_tag
 from memory_manager import run_memory_pipeline
 from agent import run_system_check
 import chat_bridge
+import reaction_bridge
 import tts as _tts
 from session_logger import session_logger
 from scheduler import scheduler as _scheduler
@@ -133,6 +134,16 @@ def _delete_session_draft() -> None:
             os.remove(SESSION_DRAFT_PATH)
     except Exception:
         pass
+
+
+_REACTION_TAG_RE = re.compile(r'\[REACTION:\s*([^\]]+?)\s*\]', re.UNICODE)
+
+
+def _parse_reaction_tags(text: str) -> tuple[str, list[str]]:
+    """Extract [REACTION: emoji] tags from text; return (clean_text, [emojis])."""
+    emojis = _REACTION_TAG_RE.findall(text)
+    clean = _REACTION_TAG_RE.sub("", text).strip()
+    return clean, emojis
 
 
 def _strip_timestamps(text: str) -> str:
@@ -447,6 +458,12 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat_bridge.set_sender(_make_sender(update, _loop))
         chat_bridge.set_context_injector(_sleep_aware_context_injector)
         chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
+        reaction_bridge.configure(
+            loop=_loop,
+            bot=ctx.bot,
+            chat_id=update.effective_chat.id,
+            user_msg_id=update.message.message_id,
+        )
 
         try:
             reply = await asyncio.wait_for(
@@ -589,6 +606,15 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     global _active_cancel_event, _active_llm_task
     cancel_event = threading.Event()
     _active_cancel_event = cancel_event
+
+    # Configure reaction bridge so tools/output tags can react to this message
+    reaction_bridge.configure(
+        loop=asyncio.get_event_loop(),
+        bot=ctx.bot,
+        chat_id=update.effective_chat.id,
+        user_msg_id=update.message.message_id,
+    )
+
     typing_task = asyncio.create_task(keep_typing())
     llm_task = asyncio.ensure_future(
         asyncio.to_thread(llm.run, user_text, update.message.date, cancel_event)
@@ -612,15 +638,56 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         typing_task.cancel()
 
     stripped = _strip_timestamps(reply)
+    stripped, reaction_emojis = _parse_reaction_tags(stripped)
+
+    # Send emoji reactions to the user's message (from [REACTION: emoji] tags)
+    for emoji in reaction_emojis:
+        try:
+            await ctx.bot.set_message_reaction(
+                chat_id=update.effective_chat.id,
+                message_id=update.message.message_id,
+                reaction=[ReactionTypeEmoji(emoji=emoji)],
+            )
+        except Exception as _re:
+            logger.debug("Could not set reaction %r: %s", emoji, _re)
+
     if stripped:
         await update.message.reply_text(stripped)
         if _voice_mode:
             asyncio.create_task(_send_voice_reply(update, stripped))
-    else:
+    elif not reaction_emojis:
         logger.warning("LLM run(): leeg antwoord voor bericht: %r", user_text[:100])
         await update.message.reply_text("(Geen antwoord ontvangen van het model. Probeer het opnieuw.)")
     _save_session_draft()
     session_logger.on_turn(context.get_history())
+
+
+async def handle_reaction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inbound message_reaction updates — inject as emotional feedback into context."""
+    rxn = update.message_reaction
+    if rxn is None:
+        return
+
+    user = rxn.user or getattr(rxn, "actor_chat", None)
+    if getattr(user, "id", None) != ALLOWED_USER_ID:
+        return
+
+    new_reactions = rxn.new_reaction or []
+    if not new_reactions:
+        return  # Reaction removed — ignore
+
+    emojis = [getattr(r, "emoji", None) for r in new_reactions]
+    emojis = [e for e in emojis if e]
+    if not emojis:
+        return
+
+    emoji_str = " ".join(emojis)
+    notification = (
+        f"[Systeem: Gebruiker reageerde met {emoji_str} op bericht #{rxn.message_id}. "
+        f"Verwerk dit als emotionele feedback bij je volgende response.]"
+    )
+    context.add_message("user", notification)
+    logger.info("Inbound reaction: %s on message %d", emoji_str, rxn.message_id)
 
 
 async def _run_syscheck_background(update: Update) -> None:
@@ -817,4 +884,5 @@ def build_app() -> Application:
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageReactionHandler(handle_reaction))
     return app
