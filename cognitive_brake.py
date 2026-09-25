@@ -232,6 +232,7 @@ def clear_stop_order() -> str:
         _heavy_topic_timestamps.clear()
         _fatigue_timestamps.clear()
     _save_session_state()
+    _stop_rest_music()
     logger.info("CognitiveBrake: Stop Order cleared — session timer and counters reset")
     return (
         f"✅ Stop Order vrijgegeven na {_required_pause_minutes:.0f} minuten rust. "
@@ -501,6 +502,16 @@ def _start_rest_music() -> None:
         logger.debug("CognitiveBrake: could not start rest music", exc_info=True)
 
 
+def _stop_rest_music() -> None:
+    """Stop music playback when the Stop Order is cleared."""
+    try:
+        from tools.music_tools import control_music
+        result = control_music({"action": "pause"})
+        logger.info("CognitiveBrake: rest music stopped — %s", result)
+    except Exception:
+        logger.debug("CognitiveBrake: could not stop rest music", exc_info=True)
+
+
 def _monitor_loop() -> None:
     """Background thread — evaluates thresholds every 60 seconds."""
     while True:
@@ -607,26 +618,6 @@ def _check_thresholds() -> None:
         )
         return
 
-    # Warning — soft alert before the hard stop (temporal only)
-    # Atomically check-and-set to prevent double-fire from concurrent calls
-    with _lock:
-        if temporal_warn and not _warn_sent:
-            _warn_sent = True
-            should_warn = True
-        else:
-            should_warn = False
-
-    if should_warn:
-        _save_session_state()
-        _push_notification(
-            f"⚠️ COGNITIEVE REM: Je bevindt je nu al {minutes_int} minuten in "
-            f"een intensieve analyse ({state} fase). Je systeem loopt risico op "
-            f"overbelasting. Overweeg een STOP ORDER en neem 15 minuten rust."
-        )
-        logger.info(
-            "CognitiveBrake: warning sent (%.1f min, %d complex calls, state=%s)",
-            minutes, complex_calls, state,
-        )
 
 
 # ---------------------------------------------------------------------------
