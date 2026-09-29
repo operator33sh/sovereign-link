@@ -133,6 +133,7 @@ _current_phase: Phase = "NEUTRAAL"   # last raw LLM detection
 _acl_phase: Phase = "NEUTRAAL"       # phase currently written to ACL
 _phase_history: deque[_Detection] = deque(maxlen=50)  # rolling detection log
 _governor = None  # DriftGovernor instance, lazy-initialized
+_last_jev_ms = None  # last MentalStateResult from Jev, or None when LLM path was used
 
 
 def _burst_score() -> float:
@@ -283,11 +284,37 @@ def _call_llm(user_message: str, burst: float, history: list | None = None) -> d
 
 
 def detect_phase(user_message: str, history: list | None = None) -> tuple[Phase, float, str]:
-    """Analyze user_message via LLM. Return (phase, confidence, reason).
+    """Analyze user_message and return (phase, confidence, reason).
 
-    Falls back to NEUTRAAL on any error so the main chat loop is never blocked.
+    Tries Jev first (fast typed decision, ~50ms). Falls back to the LLM when
+    Jev is disabled or unreachable. Never raises.
     """
     burst = _burst_score()
+
+    # ── Fast path: Jev typed classification ──────────────────────────────
+    global _last_jev_ms
+    try:
+        import jev as _jev
+        if _jev.ENABLED:
+            ms = _jev.classify_mental_state_sync(user_message)
+            if ms is not None:
+                _last_jev_ms = ms
+                reason = (
+                    f"jev: clarity={ms.clarity:.2f} "
+                    f"ground={ms.groundedness:.2f} "
+                    f"activation={ms.emotional_activation:.2f}"
+                )
+                logger.debug(
+                    "mental_state_analyzer: Jev → phase=%s confidence=%.2f %s",
+                    ms.phase, ms.confidence, reason,
+                )
+                return ms.phase, min(1.0, ms.confidence), reason
+    except Exception as exc:
+        logger.warning("mental_state_analyzer: Jev call failed — %s", exc)
+
+    _last_jev_ms = None  # LLM path — no dimension scores available
+
+    # ── Slow path: LLM-based detection ───────────────────────────────────
     try:
         result = _call_llm(user_message, burst, history=history)
         phase_raw = str(result.get("phase", "NEUTRAAL")).upper()
@@ -363,12 +390,28 @@ def _get_governor():
 
 
 def _feed_governor(phase: Phase) -> None:
-    delta = _DRIFT_DELTAS.get(phase)
+    governor = _get_governor()
+    if _last_jev_ms is not None:
+        # Dynamic path: push each dimension toward the Jev-observed value
+        delta = {
+            dim: getattr(_last_jev_ms, dim) - governor.current_state.get(dim, 0.0)
+            for dim in ("clarity", "groundedness", "emotional_activation")
+        }
+        logger.debug(
+            "mental_state_analyzer: DriftGovernor ← Jev dims clarity=%.2f "
+            "ground=%.2f activation=%.2f (delta=%s)",
+            _last_jev_ms.clarity, _last_jev_ms.groundedness,
+            _last_jev_ms.emotional_activation,
+            {k: f"{v:+.3f}" for k, v in delta.items()},
+        )
+    else:
+        # Static fallback when only LLM phase is available
+        delta = _DRIFT_DELTAS.get(phase)
     if not delta:
         return
     try:
         from drift_governor import DeltaRuleEvent, predicate_never
-        result = _get_governor().apply_delta(
+        result = governor.apply_delta(
             DeltaRuleEvent(
                 trigger_input=f"mental_state:{phase}",
                 delta_behavior=delta,

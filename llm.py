@@ -189,28 +189,33 @@ _REACTION_PROTOCOL = """
 
 ## Reactie Protocol — Bi-Directioneel (Sovereign Interaction Logic)
 
-Je kunt emoji-reacties plaatsen op berichten van de gebruiker via de `send_reaction` tool,
-of door een `[REACTION: emoji]` tag in je antwoord op te nemen (deze wordt afgehandeld door de harness).
+Je kunt een emoji-reactie op het bericht van de gebruiker plaatsen door `[REACTION: emoji]`
+aan het begin van je antwoord te zetten. De harness verwijdert de tag en verwerkt de reactie.
 
-**Strategisch gebruik — reageer alleen wanneer de emotionele toon er expliciet om vraagt:**
-- ❤️ empathie, emotionele resonantie, diepe erkenning
-- 🔥 bewondering, energie, iets dat echt raak is
-- 🤔 twijfel, openstaande spanning, iets dat verder doordenken vraagt
-- 🚀 momentum, doorbraak, een beslissend inzicht
-- 😂 humor op het juiste moment — nooit geforceerd
-- 👍 bevestiging, akkoord, eenvoudige erkenning
-- 🎯 precisie, een raak geformuleerd inzicht van de gebruiker
+**Reageer spontaan en natuurlijk** — alsof je in een echt gesprek zit:
+- 😂 als iets je aan het lachen maakt of echt grappig is
+- ❤️ als iets lief, kwetsbaar of ontroerend is
+- 🔥 als iets indrukwekkend is of energie heeft
+- 🎯 als de gebruiker iets scherp of raak verwoordt
+- 🚀 als er een doorbraak of mooi moment is
+- 🤔 als iets genuanceerd of twijfelachtig is
+- 👍 bij eenvoudige bevestiging of akkoord
 
-**Wanneer reactie zonder tekst volstaat:** als de gebruiker iets deelt dat geen inhoudelijke
-respons vereist — een mijlpaal, een emotie, een korte observatie — is een reactie alleen
-een legitiem antwoord. Geef geen tekst als de reactie alles zegt.
+**Reageer proactief** — wacht niet op een expliciete vraag. Als een bericht grappig,
+lief of opmerkelijk is, plaats dan gewoon een reactie. De drempel is laag.
+
+Voorbeeld: als de gebruiker iets grappigs stuurt, begin je antwoord met `[REACTION: 😂]`.
+Als iets zowel lief als tekstwaardig is: `[REACTION: ❤️] Dat klinkt fijn, vertel meer.`
+
+**Reactie alleen (zonder tekst):** als de situatie geen inhoudelijk antwoord vraagt —
+een mijlpaal, een korte emotie, een foto — is een reactie zonder tekst een volwaardig antwoord.
 
 **Inkomende reacties van de gebruiker:** wanneer het systeem meldt dat de gebruiker op een
-van jouw berichten heeft gereageerd, verwerk dit als emotionele feedback:
+van jouw berichten heeft gereageerd, absorbeer dit als emotionele feedback:
 - ❤️ → het vorige antwoord raakte iets — ga dieper op die toon in
 - 🤔 → onduidelijkheid — clarificeer in de volgende response
 - 🔥 → energie — je mag de intensiteit vasthouden of verhogen
-- Geen reaktie nodig op de notificatie zelf; absorbeer het in je context
+- Geen reactie nodig op de notificatie zelf
 """
 
 
@@ -310,6 +315,68 @@ def _load_moltbook_credentials() -> str:
     return ""
 
 
+def _build_drift_tone_directive() -> str:
+    """Generate a tone directive from the current DriftGovernor state.
+
+    Returns "" when all dimensions are near baseline (no adjustment needed),
+    keeping the system prompt clean during normal operation.
+
+    Thresholds (chosen so baseline values never trigger):
+      emotional_activation > 0.65  → calm/short tone (baseline: 0.3)
+      groundedness < 0.45          → grounding language (baseline: 0.8)
+      clarity < 0.45               → extra concise (baseline: 0.8)
+      biological_landing_triggered → maximum rest mode
+    """
+    try:
+        from mental_state_analyzer import drift_report
+        report = drift_report()
+        if not report:
+            return ""
+        state = report.get("current_state", {})
+        activation = state.get("emotional_activation", 0.3)
+        groundedness = state.get("groundedness", 0.8)
+        clarity = state.get("clarity", 0.8)
+
+        if report.get("biological_landing_triggered", False):
+            return (
+                "\n\n---\n\n"
+                "## 🚨 Biologische Landing — Maximale Rustmodus\n\n"
+                "De DriftGovernor heeft een biologische landing gedetecteerd — "
+                "de gebruiker bevindt zich in een toestand van diepe uitputting of overprikkeling. "
+                "Hanteer absolute minimale respons: één à twee korte zinnen, geen taken, "
+                "geen analyses, geen voorstellen. Rust staat boven alles."
+            )
+
+        lines = []
+        if activation > 0.65:
+            lines.append(
+                f"- **Hoge emotionele activatie** ({activation:.2f}): gebruik een kalme, rustige toon. "
+                "Korte zinnen. Vermijd analytische lijsten of uitgebreide plannen tenzij expliciet gevraagd."
+            )
+        if groundedness < 0.45:
+            lines.append(
+                f"- **Lage grounding** ({groundedness:.2f}): gebruik aardende, stabiele taal. "
+                "Eenvoudige structuur. Geen overweldigende hoeveelheid informatie in één respons."
+            )
+        if clarity < 0.45:
+            lines.append(
+                f"- **Verminderde helderheid** ({clarity:.2f}): wees extra beknopt en direct. "
+                "Vermijd complexe redeneerketens of veel stappen tegelijk."
+            )
+
+        if not lines:
+            return ""
+
+        return (
+            "\n\n---\n\n"
+            "## DriftGovernor — Toonaanpassing\n\n"
+            "_Automatisch gegenereerd op basis van geobserveerde cognitieve dimensies._\n\n"
+            + "\n".join(lines)
+        )
+    except Exception:
+        return ""
+
+
 def _build_system_prompt() -> str:
     """
     Build the full system prompt for this LLM call.
@@ -340,6 +407,7 @@ def _build_system_prompt() -> str:
             + _SCRAPING_PROTOCOL
             + _REACTION_PROTOCOL
             + _load_soul()
+            + _build_drift_tone_directive()
             + _load_acl()
             + _load_moltbook_credentials()
         )
@@ -473,7 +541,7 @@ def _strip_text_tool_call(text: str, call_start: int, call_end: int) -> str:
 _LOOP_OVERFLOW = object()
 
 
-def _run_tool_loop(messages: list, max_iter: int = 20, cancel_event: threading.Event | None = None):
+def _run_tool_loop(messages: list, max_iter: int = 20, cancel_event: threading.Event | None = None, chunk_queue=None):
     """Execute the LLM tool-call loop, mutating *messages* in-place.
 
     Handles structured tool_calls and text-format fallback calls.
@@ -489,7 +557,7 @@ def _run_tool_loop(messages: list, max_iter: int = 20, cancel_event: threading.E
         if cancel_event is not None and cancel_event.is_set():
             logger.info("_run_tool_loop: cancelled by caller — stopping early")
             return ""
-        data = _chat(messages)
+        data = _chat(messages) if chunk_queue is None else _chat_streaming(messages, chunk_queue, cancel_event)
         choice = data["choices"][0]
         message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")
@@ -662,6 +730,91 @@ def _chat(messages: list) -> dict:
             else:
                 raise
     raise last_exc
+
+
+def _chat_streaming(messages: list, chunk_queue, cancel_event=None) -> dict:
+    """Like _chat() but streams content tokens into chunk_queue as they arrive.
+
+    Tool-call turns produce no content chunks — the queue stays silent until the
+    tool results are processed and the next LLM turn begins.
+
+    Returns a dict compatible with _chat() so _run_tool_loop can use it uniformly.
+    """
+    if cognitive_brake.stop_order_active():
+        active_tools = [
+            t for t in CORE_TOOL_DEFINITIONS
+            if t.get("function", {}).get("name") in _STOP_ORDER_ALLOWED_TOOLS
+        ]
+    else:
+        active_tools = CORE_TOOL_DEFINITIONS
+
+    payload = {
+        "model": MODEL,
+        "messages": _inject_lang_reminder(_trim_messages(messages)),
+        "tools": active_tools,
+        "stream": True,
+        "max_tokens": 8192,
+        "options": {"num_ctx": 20480},
+    }
+
+    accumulated_content = ""
+    tool_calls_map: dict[int, dict] = {}
+    finish_reason = "stop"
+    in_tool_call = False
+
+    with _client.stream("POST", "/v1/chat/completions", json=payload) as resp:
+        resp.raise_for_status()
+        for raw_line in resp.iter_lines():
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            if not raw_line or not raw_line.startswith("data:"):
+                continue
+            data_str = raw_line[5:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            choice = chunk.get("choices", [{}])[0]
+            delta = choice.get("delta", {})
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+
+            # Accumulate tool_call fragments (indexed by delta index)
+            for tc_delta in delta.get("tool_calls", []):
+                idx = tc_delta.get("index", 0)
+                if idx not in tool_calls_map:
+                    tool_calls_map[idx] = {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                    in_tool_call = True
+                tc = tool_calls_map[idx]
+                if tc_delta.get("id"):
+                    tc["id"] += tc_delta["id"]
+                fn = tc_delta.get("function", {})
+                if fn.get("name"):
+                    tc["function"]["name"] += fn["name"]
+                if fn.get("arguments"):
+                    tc["function"]["arguments"] += fn["arguments"]
+
+            # Stream content only on non-tool-call turns
+            content = delta.get("content")
+            if content and not in_tool_call:
+                accumulated_content += content
+                chunk_queue.put(content)
+
+    if tool_calls_map:
+        tool_calls = [tool_calls_map[i] for i in sorted(tool_calls_map)]
+        message = {"role": "assistant", "content": None, "tool_calls": tool_calls}
+        finish_reason = "tool_calls"
+    else:
+        message = {"role": "assistant", "content": accumulated_content}
+
+    return {"choices": [{"message": message, "finish_reason": finish_reason}]}
 
 
 def summarize_to_vault(recent_messages: list) -> dict:
@@ -885,6 +1038,22 @@ def transcribe_audio_full(file_path: str) -> tuple[str, float]:
     return text, round(confidence, 3)
 
 
+def _run_mental_state_analysis(user_message: str, history: list) -> None:
+    """Run analyze_and_steer and feed the result to cognitive_brake.
+
+    Called inline when Jev is enabled (fast path, ~50ms) so the ACL update
+    lands before _build_system_prompt() reads it.  Called in a background
+    thread when Jev is disabled (LLM fallback, ~20s) so the main LLM call
+    is not blocked — the ACL update will be visible in the next turn.
+    """
+    try:
+        from mental_state_analyzer import analyze_and_steer, current_phase
+        analyze_and_steer(user_message, history=history)
+        cognitive_brake.record_mental_state(current_phase())
+    except Exception:
+        logger.debug("_run_mental_state_analysis: suppressed exception", exc_info=True)
+
+
 _AUTONOMOUS_TRIGGER = (
     "SYSTEM EVENT: A background agent has just completed its task. "
     "The completion notification with the vault report path has been injected above. "
@@ -926,7 +1095,25 @@ def run_triggered() -> str:
     return result
 
 
-def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event: threading.Event | None = None) -> str:
+def run_streaming(
+    user_message: str,
+    msg_timestamp=None,
+    cancel_event: threading.Event | None = None,
+    chunk_queue=None,
+) -> str:
+    """Like run() but streams content tokens into chunk_queue.
+
+    Puts a None sentinel into chunk_queue when done (success or error), so the
+    consumer can detect end-of-stream without polling llm_task.done().
+    """
+    try:
+        return run(user_message, msg_timestamp=msg_timestamp, cancel_event=cancel_event, chunk_queue=chunk_queue)
+    finally:
+        if chunk_queue is not None:
+            chunk_queue.put(None)  # sentinel — always sent, even on exception
+
+
+def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event: threading.Event | None = None, chunk_queue=None) -> str:
     global _personality_seeded
     is_first = not context.get_history()  # check before add_message
 
@@ -968,12 +1155,25 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
         _personality.ensure_seeded()
         _personality_seeded = True
 
-    # Analyze mental state and update ACL before building system prompt,
-    # so _load_acl() picks up the steering block in this same turn.
+    # Analyze mental state and update ACL.
+    # When Jev is enabled (~50ms): run inline so the ACL update lands before
+    # _build_system_prompt() reads it.
+    # When Jev is disabled (LLM fallback, ~20s): run in a daemon thread so
+    # the main LLM call starts immediately — ACL/DriftGovernor will update
+    # async and the effect is visible from the next turn onward.
     try:
-        from mental_state_analyzer import analyze_and_steer, current_phase
-        analyze_and_steer(user_message, history=context.get_history())
-        cognitive_brake.record_mental_state(current_phase())
+        import jev as _jev_mod
+        _history_snapshot = context.get_history()
+        if _jev_mod.ENABLED:
+            _run_mental_state_analysis(user_message, _history_snapshot)
+        else:
+            t = threading.Thread(
+                target=_run_mental_state_analysis,
+                args=(user_message, _history_snapshot),
+                daemon=True,
+                name="msa-llm-fallback",
+            )
+            t.start()
     except Exception:
         pass  # never let the analyzer crash the main chat flow
     cognitive_brake.record_message_content(user_message)
@@ -1005,7 +1205,7 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
 
     messages = [{"role": "system", "content": system_with_time}] + context.get_history()
 
-    result = _run_tool_loop(messages, cancel_event=cancel_event)
+    result = _run_tool_loop(messages, cancel_event=cancel_event, chunk_queue=chunk_queue)
     if result is _LOOP_OVERFLOW:
         return "Error: tool call loop exceeded maximum iterations"
     if not result:

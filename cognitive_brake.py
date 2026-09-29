@@ -527,6 +527,61 @@ def _count_in_window(timestamps: list[float], window_seconds: int) -> int:
     return sum(1 for t in timestamps if t >= cutoff)
 
 
+def _jev_pause_minutes() -> float | None:
+    """Return a Jev-derived required pause duration in minutes, or None.
+
+    Maps emotional_activation [0, 1] → [_MIN_PAUSE_MINUTES, 45] minutes:
+      activation=0.0 → 15 min (floor)
+      activation=0.5 → 30 min
+      activation=1.0 → 45 min
+
+    Returns None when Jev is disabled or no result is available.
+    Only call this at Stop Order activation time.
+    """
+    try:
+        from mental_state_analyzer import _last_jev_ms
+        if _last_jev_ms is None:
+            return None
+        pause = _MIN_PAUSE_MINUTES + _last_jev_ms.emotional_activation * 30.0
+        return max(_MIN_PAUSE_MINUTES, round(pause))
+    except Exception:
+        logger.debug("CognitiveBrake: could not read Jev activation for pause", exc_info=True)
+        return None
+
+
+def _jev_brake_scale() -> float:
+    """Return a threshold scale factor [0.5, 1.5] based on Jev dimension scores.
+
+    < 1.0 → brake triggers sooner (more sensitive)
+    > 1.0 → brake triggers later (more lenient)
+
+    At the DriftGovernor baseline (groundedness=0.8, emotional_activation=0.3)
+    the scale is ~1.0 — no change from the configured defaults.
+
+    High groundedness + low activation → lenient (up to 1.5×)
+    Low groundedness + high activation → sensitive (down to 0.5×)
+
+    Falls back to 1.0 when Jev is disabled or no Jev result is available.
+    """
+    try:
+        from mental_state_analyzer import _last_jev_ms
+        if _last_jev_ms is None:
+            return 1.0
+        # groundedness pushes scale up; activation pushes it down
+        # At baseline (ground=0.8, act=0.3): raw = 0.8 - 0.15 = 0.65
+        raw = _last_jev_ms.groundedness - _last_jev_ms.emotional_activation * 0.5
+        normalized = raw / 0.65  # 1.0 at baseline
+        scale = max(0.5, min(1.5, normalized))
+        logger.debug(
+            "CognitiveBrake: Jev brake scale=%.2f (ground=%.2f act=%.2f)",
+            scale, _last_jev_ms.groundedness, _last_jev_ms.emotional_activation,
+        )
+        return scale
+    except Exception:
+        logger.debug("CognitiveBrake: could not read Jev dimensions", exc_info=True)
+        return 1.0
+
+
 def _check_thresholds() -> None:
     """Evaluate session against limits and fire notifications when needed."""
     global _stop_order_active, _warn_sent, _stop_sent
@@ -543,13 +598,19 @@ def _check_thresholds() -> None:
     minutes_int = int(minutes)
     complex_calls = _complex_calls_in_window(cfg["window_seconds"])
 
+    # Jev dimension scores provide a continuous scale factor [0.5, 1.5].
+    # Values < 1.0 tighten all thresholds (brake fires sooner);
+    # values > 1.0 loosen them (brake fires later).
+    # User-set timer overrides are never scaled — they are intentional.
+    scale = _jev_brake_scale()
+
     # User-defined override takes priority over phase defaults
     if _timer_override_minutes is not None:
         stop_min = _timer_override_minutes
         warn_min = max(1.0, _timer_override_minutes * 0.8)
     else:
-        warn_min = cfg["session_warn_minutes"]
-        stop_min = cfg["session_stop_minutes"]
+        stop_min = cfg["session_stop_minutes"] * scale
+        warn_min = cfg["session_warn_minutes"] * scale
     call_limit: int = cfg["complex_calls_per_window"]
 
     # ── Trigger 1: Temporal / complex-call density ──────────────────────────
@@ -557,15 +618,15 @@ def _check_thresholds() -> None:
     temporal_warn = minutes >= warn_min or complex_calls >= call_limit
 
     # ── Trigger 2: Emotional — STABILISATIE streak or heavy topic density ───
-    streak_limit: int = cfg.get("stabilisatie_streak_stop", 4)
+    streak_limit: int = max(1, round(cfg.get("stabilisatie_streak_stop", 4) * scale))
     heavy_window: int = cfg.get("heavy_topics_window_seconds", 900)
-    heavy_limit: int = cfg.get("heavy_topics_stop_count", 3)
+    heavy_limit: int = max(1, round(cfg.get("heavy_topics_stop_count", 3) * scale))
     heavy_count = _count_in_window(_heavy_topic_timestamps, heavy_window)
     emotional_stop = _stabilisatie_streak >= streak_limit or heavy_count >= heavy_limit
 
     # ── Trigger 3: Cognitive fatigue ─────────────────────────────────────────
     fatigue_window: int = cfg.get("fatigue_window_seconds", 600)
-    fatigue_limit: int = cfg.get("fatigue_stop_count", 2)
+    fatigue_limit: int = max(1, round(cfg.get("fatigue_stop_count", 2) * scale))
     fatigue_count = _count_in_window(_fatigue_timestamps, fatigue_window)
     cognitive_stop = fatigue_count >= fatigue_limit
 
@@ -581,6 +642,15 @@ def _check_thresholds() -> None:
             _stop_sent = True
             _warn_sent = True
             _stop_order_activated_at = time.time()
+            # Raise pause duration based on Jev emotional activation — never lower
+            # a user-set override, but Jev can push it above the 15-min floor.
+            jev_pause = _jev_pause_minutes()
+            if jev_pause is not None:
+                _required_pause_minutes = max(_required_pause_minutes, jev_pause)
+                logger.info(
+                    "CognitiveBrake: Jev pause duration → %.0f min (jev=%.0f min)",
+                    _required_pause_minutes, jev_pause,
+                )
 
         if emotional_stop:
             if _stabilisatie_streak >= streak_limit:

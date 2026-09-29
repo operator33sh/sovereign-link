@@ -16,6 +16,7 @@ from telegram import Update, BotCommand, ReactionTypeEmoji
 from telegram.ext import Application, CommandHandler, MessageHandler, MessageReactionHandler, filters, ContextTypes
 
 import context
+import jev
 import llm
 import vector
 from tools import write_vault, sync_vault, generate_time_tag
@@ -589,6 +590,57 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
     user_text = update.message.text
 
+    # --- Jev routing classification (non-blocking, degrades gracefully) ---
+    route = await jev.classify_request(user_text)
+    if route:
+        logger.info("Jev route: %s", route)
+
+        # Route A: task → auto-spawn background agent, skip LLM entirely
+        if route.needs_agent and route.type_confidence >= 0.75:
+            agent_name = f"JevAgent_{datetime.now().strftime('%H%M%S')}"
+            _loop = asyncio.get_event_loop()
+            chat_bridge.set_sender(_make_sender(update, _loop))
+            chat_bridge.set_context_injector(_sleep_aware_context_injector)
+            chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
+            from agent import launch_agent as _launch_agent
+            _launch_agent(
+                user_text, agent_name,
+                context_injector=chat_bridge.get_context_injector(),
+                llm_trigger=chat_bridge.get_llm_trigger(),
+            )
+            await update.message.reply_text(
+                f"Jev detecteerde een taak → agent `{agent_name}` gestart.\n"
+                f"Luna deelt de bevindingen zodra het klaar is.",
+                parse_mode="Markdown",
+            )
+            _save_session_draft()
+            session_logger.on_turn(context.get_history())
+            return
+
+        # Route B: vault query → pre-fetch relevant context before LLM call.
+        # Require a strong vault signal (≥ 0.75) to avoid polluting the LLM
+        # context with marginally relevant vault chunks.
+        if route.needs_vault and route.needs_vault_score >= 0.75:
+            try:
+                vault_ctx = await asyncio.to_thread(
+                    vector.search_vault_semantic, user_text, 5
+                )
+                if vault_ctx and "leeg" not in vault_ctx:
+                    user_text = (
+                        f"{user_text}\n\n[Jev vault pre-fetch]\n{vault_ctx}"
+                    )
+                    logger.info(
+                        "Jev vault pre-fetch injected (%d chars, score=%.2f)",
+                        len(vault_ctx), route.needs_vault_score,
+                    )
+            except Exception:
+                logger.debug("Jev vault pre-fetch failed", exc_info=True)
+        elif route.needs_vault:
+            logger.debug(
+                "Jev vault pre-fetch skipped — score %.2f below 0.75 threshold",
+                route.needs_vault_score,
+            )
+
     async def keep_typing():
         while True:
             try:
@@ -615,17 +667,48 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         user_msg_id=update.message.message_id,
     )
 
-    typing_task = asyncio.create_task(keep_typing())
+    import queue as _queue_module
+    chunk_queue: _queue_module.Queue = _queue_module.Queue()
+
     llm_task = asyncio.ensure_future(
-        asyncio.to_thread(llm.run, user_text, update.message.date, cancel_event)
+        asyncio.to_thread(llm.run_streaming, user_text, update.message.date, cancel_event, chunk_queue)
     )
     _active_llm_task = llm_task
+
+    stream_msg = None
+    reply = ""
     try:
-        reply = await asyncio.wait_for(asyncio.shield(llm_task), timeout=LLM_TIMEOUT)
+        stream_msg = await update.message.reply_text("▍")
+        accumulated = ""
+        last_edit = asyncio.get_event_loop().time()
+
+        async def _drain() -> None:
+            nonlocal accumulated, last_edit
+            while True:
+                try:
+                    chunk = chunk_queue.get_nowait()
+                except _queue_module.Empty:
+                    if llm_task.done() and chunk_queue.empty():
+                        break
+                    await asyncio.sleep(0.05)
+                    continue
+                if chunk is None:  # sentinel
+                    break
+                accumulated += chunk
+                now = asyncio.get_event_loop().time()
+                if now - last_edit >= 0.3:
+                    try:
+                        await stream_msg.edit_text(accumulated + " ▍")
+                    except Exception:
+                        pass
+                    last_edit = now
+
+        await asyncio.wait_for(_drain(), timeout=LLM_TIMEOUT)
+        reply = await asyncio.wait_for(asyncio.shield(llm_task), timeout=15)
     except asyncio.TimeoutError:
         cancel_event.set()
         llm_task.cancel()
-        logger.error("LLM run() timed out na %.0fs voor bericht: %r", LLM_TIMEOUT, user_text[:100])
+        logger.error("LLM run_streaming() timed out na %.0fs voor bericht: %r", LLM_TIMEOUT, user_text[:100])
         reply = "Het antwoord duurde te lang. Probeer het opnieuw."
     except asyncio.CancelledError:
         reply = "⛔ Gestopt."
@@ -635,7 +718,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     finally:
         _active_cancel_event = None
         _active_llm_task = None
-        typing_task.cancel()
+        chunk_queue.put(None)  # unblock _drain if still waiting
 
     stripped = _strip_timestamps(reply)
     stripped, reaction_emojis = _parse_reaction_tags(stripped)
@@ -652,12 +735,25 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             logger.debug("Could not set reaction %r: %s", emoji, _re)
 
     if stripped:
-        await update.message.reply_text(stripped)
+        if stream_msg is not None:
+            try:
+                await stream_msg.edit_text(stripped)
+            except Exception:
+                await update.message.reply_text(stripped)
+        else:
+            await update.message.reply_text(stripped)
         if _voice_mode:
             asyncio.create_task(_send_voice_reply(update, stripped))
     elif not reaction_emojis:
         logger.warning("LLM run(): leeg antwoord voor bericht: %r", user_text[:100])
-        await update.message.reply_text("(Geen antwoord ontvangen van het model. Probeer het opnieuw.)")
+        fallback = "(Geen antwoord ontvangen van het model. Probeer het opnieuw.)"
+        if stream_msg is not None:
+            try:
+                await stream_msg.edit_text(fallback)
+            except Exception:
+                await update.message.reply_text(fallback)
+        else:
+            await update.message.reply_text(fallback)
     _save_session_draft()
     session_logger.on_turn(context.get_history())
 
