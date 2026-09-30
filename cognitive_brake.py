@@ -541,11 +541,14 @@ def _auto_release_stop_order() -> None:
     with _lock:
         if not _stop_order_active:
             return
-        if _stop_order_activated_at is not None:
-            elapsed_pause = (time.time() - _stop_order_activated_at) / 60.0
-            if elapsed_pause < _required_pause_minutes:
-                return  # Pause still running — do not release yet
-        # Either no activation timestamp (treat as elapsed) or elapsed >= required.
+        if _stop_order_activated_at is None:
+            # No timestamp yet (e.g. issue_stop_order() or state loaded with null).
+            # Start the pause timer now so the full required pause is enforced.
+            _stop_order_activated_at = time.time()
+            return
+        elapsed_pause = (time.time() - _stop_order_activated_at) / 60.0
+        if elapsed_pause < _required_pause_minutes:
+            return  # Pause still running — do not release yet
         # Required pause elapsed — atomically clear all state
         _session_start = time.monotonic()
         _stop_order_active = False
