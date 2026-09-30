@@ -1136,11 +1136,12 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
         if cognitive_brake.stop_order_active():
             # Pause still running — enforce the wall.
             remaining = cognitive_brake.pause_remaining_minutes()
+            from datetime import timedelta
+            release_at = (datetime.now(tz=_get_local_tz()) + timedelta(minutes=remaining)).strftime("%H:%M")
             msg = (
                 f"🛑 **Stop Order actief** — de cognitieve rem is ingeschakeld. "
-                f"Nog **{remaining:.0f} minuten** pauze vereist. "
-                f"Nieuwe taken en analyses zijn geblokkeerd. "
-                f"De rem wordt automatisch opgeheven zodra de pauzetijd verstreken is."
+                f"Nog **{remaining:.0f} minuten** pauze vereist (opheffing om ~{release_at}). "
+                f"Nieuwe taken en analyses zijn geblokkeerd."
             )
             context.add_message("assistant", msg)
             return msg

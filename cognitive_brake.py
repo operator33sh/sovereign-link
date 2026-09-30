@@ -526,11 +526,13 @@ def _auto_release_stop_order() -> None:
     elapsed_pause = 0.0
 
     with _lock:
-        if not _stop_order_active or _stop_order_activated_at is None:
+        if not _stop_order_active:
             return
-        elapsed_pause = (time.time() - _stop_order_activated_at) / 60.0
-        if elapsed_pause < _required_pause_minutes:
-            return
+        if _stop_order_activated_at is not None:
+            elapsed_pause = (time.time() - _stop_order_activated_at) / 60.0
+            if elapsed_pause < _required_pause_minutes:
+                return  # Pause still running — do not release yet
+        # Either no activation timestamp (treat as elapsed) or elapsed >= required.
         # Required pause elapsed — atomically clear all state
         _session_start = time.monotonic()
         _stop_order_active = False
