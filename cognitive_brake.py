@@ -305,8 +305,21 @@ def ensure_monitor_running() -> None:
             return
         t = threading.Thread(target=_monitor_loop, daemon=True, name="CognitiveBrake")
         _monitor_thread = t
+        is_fresh_start = True
     t.start()
     logger.info("CognitiveBrake: monitor thread started")
+    if is_fresh_start and _stop_order_active:
+        remaining = pause_remaining_minutes()
+        if remaining > 0:
+            _push_notification(
+                f"🛑 Stop Order nog actief na herstart — nog {remaining:.0f} minuten pauze vereist. "
+                f"De rem wordt automatisch opgeheven."
+            )
+        else:
+            _push_notification(
+                f"🛑 Stop Order actief na herstart — de vereiste pauzetijd is al verstreken. "
+                f"De rem wordt nu automatisch opgeheven."
+            )
 
 
 def record_mental_state(phase: str) -> None:
@@ -550,8 +563,13 @@ def _auto_release_stop_order() -> None:
 
     _save_session_state()
     _stop_rest_music()
+    duration_str = (
+        f"na {elapsed_pause:.0f} minuten rust"
+        if elapsed_pause > 0
+        else f"na de vereiste {_required_pause_minutes:.0f} minuten rust"
+    )
     _push_notification(
-        f"✅ Stop Order automatisch opgeheven na {elapsed_pause:.0f} minuten rust. "
+        f"✅ Stop Order automatisch opgeheven {duration_str}. "
         f"Je bent weer volledig operationeel, Agent. "
         f"Sessietimer herstart. Nieuwe taken zijn weer mogelijk."
     )
