@@ -1119,36 +1119,32 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
 
     cognitive_brake.ensure_monitor_running()
 
+    # Auto-release the Stop Order on every message if the required pause has elapsed.
+    # The monitor thread does this too, but only every 60 s — this closes the gap.
+    cognitive_brake._auto_release_stop_order()
+
     context.add_message("user", user_message)
 
     # Hard enforcement: when a Stop Order is active the LLM is never called.
-    # Only explicit rest-confirmation phrases trigger clear_stop_order() directly.
+    # Release is timer-only — no manual override is possible.
     if cognitive_brake.stop_order_active():
-        _lower = user_message.lower()
-        _RELEASE_PHRASES = (
-            "stop order vrijgeven", "stop order opheffen",
-            "ik heb gerust", "pauze gedaan", "ik ben uitgerust",
-        )
-        if any(p in _lower for p in _RELEASE_PHRASES):
-            result = cognitive_brake.clear_stop_order()
-            context.add_message("assistant", result)
-            return result
-        # Any other message → fixed wall, no LLM call
         remaining = cognitive_brake.pause_remaining_minutes()
-        if remaining > 0:
+        if remaining <= 0:
+            # Edge case: pause elapsed but the 60-second monitor tick hasn't fired yet.
+            # Release inline so this message is processed normally.
+            cognitive_brake._auto_release_stop_order()
+        if cognitive_brake.stop_order_active():
+            # Pause still running — enforce the wall.
+            remaining = cognitive_brake.pause_remaining_minutes()
             msg = (
                 f"🛑 **Stop Order actief** — de cognitieve rem is ingeschakeld. "
                 f"Nog **{remaining:.0f} minuten** pauze vereist. "
                 f"Nieuwe taken en analyses zijn geblokkeerd. "
-                f"Zeg *'ik heb gerust'* zodra je de pauze hebt genomen."
+                f"De rem wordt automatisch opgeheven zodra de pauzetijd verstreken is."
             )
-        else:
-            msg = (
-                "🛑 **Stop Order actief** — de vereiste pauzetijd is verstreken. "
-                "Zeg *'ik heb gerust'* om de Stop Order vrij te geven en verder te gaan."
-            )
-        context.add_message("assistant", msg)
-        return msg
+            context.add_message("assistant", msg)
+            return msg
+        # Stop Order was released inline — fall through to normal LLM processing
 
     # Seed the default personality profile on first-ever message if missing.
     if not _personality_seeded:

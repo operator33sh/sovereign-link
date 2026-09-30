@@ -512,11 +512,59 @@ def _stop_rest_music() -> None:
         logger.debug("CognitiveBrake: could not stop rest music", exc_info=True)
 
 
+def _auto_release_stop_order() -> None:
+    """Auto-release the Stop Order once the required pause duration has elapsed.
+
+    Called from _monitor_loop every 60 seconds while a Stop Order is active.
+    The release is atomic — state is cleared inside the lock before any
+    side-effects (notification, music stop) are triggered.
+    """
+    global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
+    global _stop_order_activated_at
+
+    released = False
+    elapsed_pause = 0.0
+
+    with _lock:
+        if not _stop_order_active or _stop_order_activated_at is None:
+            return
+        elapsed_pause = (time.time() - _stop_order_activated_at) / 60.0
+        if elapsed_pause < _required_pause_minutes:
+            return
+        # Required pause elapsed — atomically clear all state
+        _session_start = time.monotonic()
+        _stop_order_active = False
+        _warn_sent = False
+        _stop_sent = False
+        _stabilisatie_streak = 0
+        _stop_order_activated_at = None
+        _complex_call_timestamps.clear()
+        _heavy_topic_timestamps.clear()
+        _fatigue_timestamps.clear()
+        released = True
+
+    if not released:
+        return
+
+    _save_session_state()
+    _stop_rest_music()
+    _push_notification(
+        f"✅ Stop Order automatisch opgeheven na {elapsed_pause:.0f} minuten rust. "
+        f"Je bent weer volledig operationeel, Agent. "
+        f"Sessietimer herstart. Nieuwe taken zijn weer mogelijk."
+    )
+    logger.info(
+        "CognitiveBrake: Stop Order automatically released after %.0f min pause",
+        elapsed_pause,
+    )
+
+
 def _monitor_loop() -> None:
     """Background thread — evaluates thresholds every 60 seconds."""
     while True:
         time.sleep(60)
         try:
+            _auto_release_stop_order()
             _check_thresholds()
         except Exception:
             logger.exception("CognitiveBrake: error in monitor loop")
