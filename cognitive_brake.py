@@ -144,6 +144,11 @@ _stop_order_activated_at: float | None = None  # wall-clock time Stop Order fire
 _DEFAULT_TIMER_MINUTES: float = 30.0           # hardcoded default session stop threshold
 _timer_override_minutes: float | None = _DEFAULT_TIMER_MINUTES  # if set, replaces phase-based stop threshold
 
+# Activity-based idle tracking — timer only counts active conversation time
+_IDLE_THRESHOLD_SECONDS: int = 5 * 60         # 5 min without a message → timer pauses
+_last_activity_wall: float = time.time()       # wall-clock time of last message / tool call
+_total_idle_banked_seconds: float = 0.0        # idle seconds permanently subtracted from session
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -154,8 +159,11 @@ def reset_session() -> None:
     """Reset all tracking state — call at the start of a new session."""
     global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
     global _stop_order_activated_at, _required_pause_minutes, _timer_override_minutes
+    global _last_activity_wall, _total_idle_banked_seconds
     with _lock:
         _session_start = time.monotonic()
+        _last_activity_wall = time.time()
+        _total_idle_banked_seconds = 0.0
         _complex_call_timestamps.clear()
         _heavy_topic_timestamps.clear()
         _fatigue_timestamps.clear()
@@ -180,6 +188,7 @@ def record_complex_call(tool_name: str) -> None:
     """Record a complex tool invocation. No-op for non-complex tools."""
     if tool_name not in COMPLEX_TOOLS:
         return
+    _bank_idle_if_needed()
     with _lock:
         _complex_call_timestamps.append(time.monotonic())
     logger.debug("CognitiveBrake: recorded '%s'", tool_name)
@@ -206,6 +215,7 @@ def clear_stop_order() -> str:
     """
     global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
     global _stop_order_activated_at, _required_pause_minutes
+    global _last_activity_wall, _total_idle_banked_seconds
 
     if not _stop_order_active:
         return "Er is geen actieve Stop Order."
@@ -222,7 +232,9 @@ def clear_stop_order() -> str:
             )
 
     with _lock:
-        _session_start = time.monotonic()   # reset timer so session starts fresh
+        _session_start = time.monotonic()
+        _last_activity_wall = time.time()
+        _total_idle_banked_seconds = 0.0
         _stop_order_active = False
         _warn_sent = False
         _stop_sent = False
@@ -343,6 +355,7 @@ def record_message_content(message: str) -> None:
     Appends timestamps to the relevant sliding-window lists so that
     _check_thresholds() can evaluate them on the next monitor tick.
     """
+    _bank_idle_if_needed()
     lower = message.lower()
     now = time.monotonic()
 
@@ -402,8 +415,28 @@ def _read_mental_state() -> str:
     return "NEUTRAAL"
 
 
+def _bank_idle_if_needed() -> None:
+    """Bank idle time when the user returns after an inactive period.
+
+    Called at the start of record_message_content() and record_complex_call().
+    If the gap since the last activity exceeds _IDLE_THRESHOLD_SECONDS, the
+    excess is permanently added to _total_idle_banked_seconds so that
+    _session_minutes() does not count the time the user was away.
+    """
+    global _last_activity_wall, _total_idle_banked_seconds
+    with _lock:
+        gap = time.time() - _last_activity_wall
+        if gap > _IDLE_THRESHOLD_SECONDS:
+            _total_idle_banked_seconds += gap - _IDLE_THRESHOLD_SECONDS
+        _last_activity_wall = time.time()
+
+
 def _session_minutes() -> float:
-    return (time.monotonic() - _session_start) / 60.0
+    """Active session minutes — idle periods longer than _IDLE_THRESHOLD_SECONDS
+    are subtracted so the timer only counts time the user is actually talking."""
+    current_overage = max(0.0, time.time() - _last_activity_wall - _IDLE_THRESHOLD_SECONDS)
+    effective = (time.monotonic() - _session_start) - _total_idle_banked_seconds - current_overage
+    return max(0.0, effective / 60.0)
 
 
 def _complex_calls_in_window(window_seconds: int) -> int:
@@ -430,6 +463,7 @@ def _load_session_state() -> None:
     fresh — the user has likely slept and recovered.
     """
     global _session_start, _stop_order_active, _warn_sent, _stop_sent, _timer_override_minutes
+    global _last_activity_wall, _total_idle_banked_seconds
     _MAX_SESSION_AGE_SECONDS = 8 * 3600  # 8 hours
     path = _get_state_path()
     try:
@@ -461,6 +495,15 @@ def _load_session_state() -> None:
             )
             override = state.get("timer_override_minutes")
             _timer_override_minutes = float(override) if override is not None else _DEFAULT_TIMER_MINUTES
+            # Restore idle accounting; bank any gap since last activity across restart
+            saved_last_activity = state.get("last_activity_wall")
+            banked = float(state.get("total_idle_banked_seconds", 0.0))
+            if saved_last_activity is not None:
+                gap = time.time() - float(saved_last_activity)
+                if gap > _IDLE_THRESHOLD_SECONDS:
+                    banked += gap - _IDLE_THRESHOLD_SECONDS
+                _last_activity_wall = time.time()  # treat restart as fresh activity
+            _total_idle_banked_seconds = banked
         logger.info(
             "CognitiveBrake: resumed session (%.1f min elapsed, stop_order=%s)",
             elapsed_wall / 60, stop_was_active,
@@ -482,6 +525,8 @@ def _save_session_state() -> None:
         "required_pause_minutes": _required_pause_minutes,
         "timer_override_minutes": _timer_override_minutes,
         "warn_sent": _warn_sent,
+        "last_activity_wall": _last_activity_wall,
+        "total_idle_banked_seconds": _total_idle_banked_seconds,
         "saved_at": time.time(),
     }
     try:
@@ -534,6 +579,7 @@ def _auto_release_stop_order() -> None:
     """
     global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
     global _stop_order_activated_at
+    global _last_activity_wall, _total_idle_banked_seconds
 
     released = False
     elapsed_pause = 0.0
@@ -551,6 +597,8 @@ def _auto_release_stop_order() -> None:
             return  # Pause still running — do not release yet
         # Required pause elapsed — atomically clear all state
         _session_start = time.monotonic()
+        _last_activity_wall = time.time()
+        _total_idle_banked_seconds = 0.0
         _stop_order_active = False
         _warn_sent = False
         _stop_sent = False
