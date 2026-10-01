@@ -138,6 +138,7 @@ _fatigue_timestamps: list[float] = []      # timestamps of fatigue-signal messag
 # Pause enforcement
 _MIN_PAUSE_MINUTES: float = 15.0           # absolute floor — never overridable
 _required_pause_minutes: float = 15.0     # current required pause (Luna can raise this)
+_MIN_SESSION_BEFORE_STOP: float = 10.0    # min active conversation minutes before brake can fire
 _stop_order_activated_at: float | None = None  # wall-clock time Stop Order fired
 
 # User-defined timer override
@@ -578,7 +579,7 @@ def _auto_release_stop_order() -> None:
     side-effects (notification, music stop) are triggered.
     """
     global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
-    global _stop_order_activated_at
+    global _stop_order_activated_at, _required_pause_minutes
     global _last_activity_wall, _total_idle_banked_seconds
 
     released = False
@@ -604,6 +605,7 @@ def _auto_release_stop_order() -> None:
         _stop_sent = False
         _stabilisatie_streak = 0
         _stop_order_activated_at = None
+        _required_pause_minutes = _MIN_PAUSE_MINUTES
         _complex_call_timestamps.clear()
         _heavy_topic_timestamps.clear()
         _fatigue_timestamps.clear()
@@ -707,6 +709,10 @@ def _check_thresholds() -> None:
 
     # Already active — nothing to do
     if _stop_order_active:
+        return
+
+    # Never fire within the first _MIN_SESSION_BEFORE_STOP minutes of active conversation
+    if _session_minutes() < _MIN_SESSION_BEFORE_STOP:
         return
 
     limits = _load_limits()
