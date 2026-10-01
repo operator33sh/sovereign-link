@@ -674,6 +674,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         asyncio.to_thread(llm.run_streaming, user_text, update.message.date, cancel_event, chunk_queue)
     )
     _active_llm_task = llm_task
+    typing_task = asyncio.create_task(keep_typing())
 
     stream_msg = None
     reply = ""
@@ -716,6 +717,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         logger.exception("LLM error")
         reply = f"Error: {e}"
     finally:
+        typing_task.cancel()
         _active_cancel_event = None
         _active_llm_task = None
         chunk_queue.put(None)  # unblock _drain if still waiting
