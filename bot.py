@@ -641,14 +641,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
                 route.needs_vault_score,
             )
 
-    async def keep_typing():
-        while True:
-            try:
-                await update.message.chat.send_action("typing")
-            except Exception:
-                pass
-            await asyncio.sleep(4)
-
     # Register sender + context injector so agents can report back to chat and Luna's context
     _loop = asyncio.get_event_loop()
     chat_bridge.set_sender(_make_sender(update, _loop))
@@ -674,7 +666,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         asyncio.to_thread(llm.run_streaming, user_text, update.message.date, cancel_event, chunk_queue)
     )
     _active_llm_task = llm_task
-    typing_task = asyncio.create_task(keep_typing())
 
     stream_msg = None
     reply = ""
@@ -717,7 +708,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         logger.exception("LLM error")
         reply = f"Error: {e}"
     finally:
-        typing_task.cancel()
         _active_cancel_event = None
         _active_llm_task = None
         chunk_queue.put(None)  # unblock _drain if still waiting
