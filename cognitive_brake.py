@@ -324,9 +324,13 @@ def ensure_monitor_running() -> None:
     if is_fresh_start and _stop_order_active:
         remaining = pause_remaining_minutes()
         if remaining > 0:
+            import datetime as _dt
+            _release_time = _dt.datetime.now() + _dt.timedelta(minutes=remaining)
+            _release_str = _release_time.strftime("%H:%M")
             _push_notification(
                 f"🛑 Stop Order nog actief na herstart — nog {remaining:.0f} minuten pauze vereist. "
-                f"De rem wordt automatisch opgeheven."
+                f"Automatisch vrijgegeven om {_release_str}. "
+                f"Zeg 'stop order vrijgeven' om eerder verder te gaan."
             )
         else:
             _push_notification(
@@ -639,6 +643,12 @@ def _monitor_loop() -> None:
         try:
             _auto_release_stop_order()
             _check_thresholds()
+            # Persist state every tick while a Stop Order is active so that a
+            # sudden restart cannot bypass the pause (the activation save might
+            # have been lost if the process was killed in the brief window
+            # between the in-memory update and the first disk write).
+            if _stop_order_active:
+                _save_session_state()
         except Exception:
             logger.exception("CognitiveBrake: error in monitor loop")
 
@@ -800,10 +810,15 @@ def _check_thresholds() -> None:
             )
 
         _save_session_state()
+        import datetime as _dt
+        _release_time = _dt.datetime.now() + _dt.timedelta(minutes=_required_pause_minutes)
+        _release_str = _release_time.strftime("%H:%M")
         _push_notification(
             f"🛑 STOP ORDER — COGNITIEVE REM GEACTIVEERD: {cause} "
             f"Nieuwe analyses en complexe taken zijn tijdelijk geblokkeerd. "
-            f"Neem minimaal 15 minuten rust. Zeg 'stop order vrijgeven' om verder te gaan."
+            f"Neem minimaal {_required_pause_minutes:.0f} minuten rust. "
+            f"Automatisch vrijgegeven om {_release_str}. "
+            f"Zeg 'stop order vrijgeven' om eerder verder te gaan."
         )
         _start_rest_music()
         logger.warning(
@@ -820,3 +835,6 @@ def _check_thresholds() -> None:
 # ---------------------------------------------------------------------------
 
 _load_session_state()
+
+import atexit as _atexit
+_atexit.register(_save_session_state)

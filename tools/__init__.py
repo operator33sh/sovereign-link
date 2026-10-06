@@ -49,10 +49,12 @@ from tools.euphoria_engine import DEFINITIONS as _eed, HANDLERS as _eeh
 from tools.music_tools import DEFINITIONS as _mtd, HANDLERS as _mth
 from tools.fluidity_tools import DEFINITIONS as _fld, HANDLERS as _flh
 from tools.reaction_tools import DEFINITIONS as _rxd, HANDLERS as _rxh
+from tools.skill_tools import DEFINITIONS as _skd, HANDLERS as _skh
+from tools.vision_analyze import DEFINITIONS as _vad, HANDLERS as _vah
 
 # Search tools (_sd) placed last so they survive context-window truncation.
 # Vault tools (_vd) second-to-last for the same reason.
-TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _mntd + _twd + _sld + _ssd + _pmd + _eed + _mtd + _fld + _rxd + _vd + _sd
+TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _mntd + _twd + _sld + _ssd + _pmd + _eed + _mtd + _fld + _rxd + _skd + _vad + _vd + _sd
 
 _CORE_NAMES = {
     # Vault
@@ -84,6 +86,10 @@ _CORE_NAMES = {
     "set_fluidity",
     # Reactions
     "send_reaction",
+    # Skills
+    "load_skill",
+    # Vision
+    "vision_analyze",
 }
 
 CORE_TOOL_DEFINITIONS: list[dict] = [
@@ -92,7 +98,7 @@ CORE_TOOL_DEFINITIONS: list[dict] = [
 ]
 
 TOOL_HANDLERS: dict[str, callable] = {
-    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_mnth, **_twh, **_slh, **_ssh, **_pmh, **_eeh, **_mth, **_flh, **_rxh,
+    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_mnth, **_twh, **_slh, **_ssh, **_pmh, **_eeh, **_mth, **_flh, **_rxh, **_skh, **_vah,
 }
 
 # Sub-agents do not get write_vault — they must use write_temp → commit_to_vault

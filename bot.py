@@ -406,6 +406,130 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await status.edit_text(_strip_timestamps(reply))
 
 
+async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_authorized(update):
+        return
+
+    doc = update.message.document
+    caption = update.message.caption or ""
+
+    status = await update.message.reply_text("PDF verwerken…")
+
+    try:
+        tg_file = await ctx.bot.get_file(doc.file_id)
+        pdf_bytes = await tg_file.download_as_bytearray()
+    except Exception as e:
+        logger.exception("PDF download error")
+        await status.edit_text(f"Kon PDF niet downloaden: {e}")
+        return
+
+    try:
+        import fitz  # pymupdf
+        pdf_doc = fitz.open(stream=bytes(pdf_bytes), filetype="pdf")
+        pages_text = []
+        for page in pdf_doc:
+            pages_text.append(page.get_text())
+        pdf_doc.close()
+        extracted = "\n\n".join(pages_text).strip()
+    except Exception as e:
+        logger.exception("PDF text extraction error")
+        await status.edit_text(f"Kon tekst niet uit PDF halen: {e}")
+        return
+
+    if not extracted:
+        await status.edit_text("De PDF bevat geen leesbare tekst (mogelijk gescand/afbeelding).")
+        return
+
+    filename = doc.file_name or "document.pdf"
+    user_prompt = (
+        f"{caption}\n\n[PDF: {filename}]\n{extracted}"
+        if caption
+        else f"[PDF: {filename}]\n{extracted}"
+    )
+
+    # Truncate to avoid token limits — keep first ~12 000 chars (~3 000 tokens)
+    if len(user_prompt) > 12000:
+        user_prompt = user_prompt[:12000] + "\n\n[… PDF afgekapt na 12 000 tekens]"
+
+    global _message_count, _messages_since_last_memory, _proactive_loop
+    _message_count += 1
+    _messages_since_last_memory += 1
+    user_status.update_activity(update.effective_chat.id)
+    _proactive_loop = asyncio.get_event_loop()
+
+    _loop = asyncio.get_event_loop()
+    chat_bridge.set_sender(_make_sender(update, _loop))
+    chat_bridge.set_context_injector(_sleep_aware_context_injector)
+    chat_bridge.set_llm_trigger(_make_llm_trigger_fn())
+    reaction_bridge.configure(
+        loop=_loop,
+        bot=ctx.bot,
+        chat_id=update.effective_chat.id,
+        user_msg_id=update.message.message_id,
+    )
+
+    import queue as _queue_module
+    chunk_queue: _queue_module.Queue = _queue_module.Queue()
+    cancel_event = threading.Event()
+
+    llm_task = asyncio.ensure_future(
+        asyncio.to_thread(llm.run_streaming, user_prompt, update.message.date, cancel_event, chunk_queue)
+    )
+
+    reply = ""
+    try:
+        await status.edit_text("▍")
+        accumulated = ""
+        last_edit = asyncio.get_event_loop().time()
+
+        async def _drain() -> None:
+            nonlocal accumulated, last_edit
+            while True:
+                try:
+                    chunk = chunk_queue.get_nowait()
+                except _queue_module.Empty:
+                    if llm_task.done() and chunk_queue.empty():
+                        break
+                    await asyncio.sleep(0.05)
+                    continue
+                if chunk is None:
+                    break
+                accumulated += chunk
+                now = asyncio.get_event_loop().time()
+                if now - last_edit >= 0.3:
+                    try:
+                        await status.edit_text(accumulated + " ▍")
+                    except Exception:
+                        pass
+                    last_edit = now
+
+        await asyncio.wait_for(_drain(), timeout=LLM_TIMEOUT)
+        reply = await asyncio.wait_for(asyncio.shield(llm_task), timeout=15)
+    except asyncio.TimeoutError:
+        cancel_event.set()
+        llm_task.cancel()
+        reply = "Het antwoord duurde te lang. Probeer het opnieuw."
+    except Exception as e:
+        logger.exception("LLM PDF error")
+        reply = f"Error: {e}"
+    finally:
+        chunk_queue.put(None)
+
+    stripped = _strip_timestamps(reply)
+    stripped, reaction_emojis = _parse_reaction_tags(stripped)
+
+    if stripped:
+        try:
+            await status.edit_text(stripped)
+        except Exception:
+            await update.message.reply_text(stripped)
+    else:
+        await status.edit_text("(Geen antwoord ontvangen van het model.)")
+
+    _save_session_draft()
+    session_logger.on_turn(context.get_history())
+
+
 async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -970,6 +1094,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("timezone", cmd_timezone))
     app.add_handler(CommandHandler("voice", cmd_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageReactionHandler(handle_reaction))

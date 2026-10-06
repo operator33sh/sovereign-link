@@ -2,6 +2,8 @@
 
 > *Your own AI. On your own machine. With your own memory.*
 
+Built for **[Liquid Gnosis](https://fractalisme.nl)** — the operating system for self-knowledge.
+
 ---
 
 ## What is this?
@@ -16,8 +18,10 @@ No cloud. No subscription. No company reading along.
 |---|---|
 | A question | Searches your own notes for context and gives a grounded answer |
 | A voice message | Transcribes it, processes it, remembers what mattered |
-| A photo | Analyses the content and connects it to what you already know |
+| A photo or image | Analyses the visual content and connects it to what you already know |
+| A PDF | Extracts the full text and processes it as a document |
 | A URL | Reads the page and extracts the essence |
+| A Twitter/X link | Fetches tweet text and analyses any images or memes |
 | An emotional thought | Stores it as an insight — and surfaces it when it becomes relevant |
 
 Everything you share is stored as readable Markdown files in a local vault. You own your own memory.
@@ -40,7 +44,7 @@ When memory is yours — stored in *your* vault, on *your* machine, under *your*
 
 > The observer who maps their own patterns owns the only leverage point that matters: the moment before the next repetition.
 
-The philosophical framework lives at **[Fractalisme.nl](https://fractalisme.nl)**.
+The philosophical framework lives at **[Fractalisme.nl](https://fractalisme.nl)** — the home of Liquid Gnosis.
 
 ---
 
@@ -142,7 +146,7 @@ Create your Telegram bot token via [@BotFather](https://t.me/BotFather).
 | `/memory` | Manually trigger memory extraction on the current conversation |
 | `/whisper` | Generate a tweet-length insight from a random vault fragment |
 
-Any other message — text, voice, photo, or link — is processed directly by the AI.
+Any other message — text, voice, photo, PDF, or link — is processed directly by the AI.
 
 ---
 
@@ -151,10 +155,13 @@ Any other message — text, voice, photo, or link — is processed directly by t
 ```
 Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
                    │         └──► tools/ ──► read_vault / write_vault / sync_vault
-                   │                    └──► analyze_website (trafilatura)
+                   │                    └──► http_request (URLs, APIs)
+                   │                    └──► vision_analyze (images, URLs, base64)
+                   │                    └──► browser_tools (Playwright automation)
                    │                    └──► search_vault_semantic ──► vector.py (ChromaDB)
                    │                    └──► search_timeline ──► timeline.py (SQLite + FTS5)
-                   │                    └──► check_proton_mail / read_proton_email (IMAP)
+                   │                    └──► gmail / calendar / proton_mail
+                   │                    └──► load_skill ──► skills/ (SKILLS.md subsystem)
                    │
                    └──► memory_manager.py ──► Sovereign Memory Engine (HVI extraction)
                    │         └──► vector.py ──► ChromaDB (cosine / semantic search)
@@ -162,13 +169,15 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
                    │         └──► Obsidian Vault ──► source of proof (plain Markdown)
                    │
                    └──► cognitive_brake.py ──► Stop Order Monitor
+                   └──► drift_governor.py ──► Mental state / tone calibration
+                   └──► skills_loader.py ──► SKILLS.md scanner + manifest injector
 ```
 
 ### Layer 1 — Interface
 
 | Component | Role |
 |-----------|------|
-| 📱 **Telegram** | Primary command-and-control surface. All interaction, voice, images, and commands flow through here. |
+| 📱 **Telegram** | Primary command-and-control surface. Text, voice, images, PDFs, and commands all flow through here. |
 | 🧠 **LLM (AI Model)** | Central processing unit. Reasoning, planning, tool orchestration, and language understanding. |
 
 ### Layer 2 — Memory & Persistence
@@ -189,13 +198,21 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
 | **Active Context Layer (ACL)** | A dynamic briefing file (`.system/active_briefing.md`) that steers AI behaviour based on the user's current operational state. |
 | 🛑 **Cognitive Brake** | Background monitor (`cognitive_brake.py`) that tracks session duration, tool-call intensity, heavy psychological topics, and fatigue signals. Activates a **Stop Order** that blocks all analytical tools until a confirmed rest period has elapsed. Thresholds are phase-aware and configurable via `.system/cognitive_limits.json`. **Dynamic Override** raises thresholds +50% on positive flow signals. |
 | 🧬 **SOUL.md** | Luna's cognitive architecture kernel — injected into every system prompt. Defines identity, behavioural mechanisms, and the Stop Order protocol. Versioned in an Evolution Log within the file itself. |
+| 🎯 **DriftGovernor** | Emotional state tracker (`drift_governor.py`) that modulates Luna's tone based on mental state signals. Drives the `update_personality` tool and anti-cliché fluidity layer. |
 
-### Layer 4 — Framework
+### Layer 4 — Skills
+
+| Component | Role |
+|-----------|------|
+| **SKILLS.md subsystem** | Extensible skill definitions stored as Markdown files in `skills/`. Each skill has a YAML frontmatter declaring its tools and a natural-language workflow. `skills_loader.py` scans them at startup and injects a manifest into the system prompt. Luna calls `load_skill` to activate a skill on demand. |
+| **twitter-vision** | Built-in skill for X/Twitter links. Uses the public oEmbed API for tweet text and fxtwitter for media. Feeds images to `vision_analyze` for meme/context analysis. |
+
+### Layer 5 — Framework
 
 | Component | Role |
 |-----------|------|
 | **The Harness** | Psychological guardrails and operational constraints embedded in the system prompt. Defines the AI's behavioural contract. |
-| **Fractalism** | The philosophical framework governing how data is organised and interconnected. See [Fractalisme.nl](https://fractalisme.nl). |
+| **Liquid Gnosis** | The philosophical and operational framework governing how data is organised and interconnected. See [Fractalisme.nl](https://fractalisme.nl). |
 
 ---
 
@@ -212,33 +229,64 @@ sovereign-link/
 ├── vector.py                 # ChromaDB + Ollama embedding + filesystem watcher
 ├── timeline.py               # SQLite timeline index: date/FTS5 search across vault
 ├── ingest.py                 # Vault indexer: --rescan (full), --backfill (fix dates)
+├── drift_governor.py         # Mental state tracker + tone calibration
+├── mental_state_analyzer.py  # Emotional signal detection and state classification
+├── fluidity.py               # Anti-cliché fluidity layer for natural language output
+├── personality.py            # Luna persona management and persistence
+├── skills_loader.py          # SKILLS.md scanner: discovers skills, builds system prompt manifest
+├── session_logger.py         # Structured session logging
+├── sol_patterns.py           # Context compaction and SOL pattern utilities
+├── timezone_manager.py       # User timezone detection and persistence
 ├── SOUL.md                   # Luna's cognitive architecture kernel
 │
+├── skills/                   # SKILLS.md skill definitions
+│   ├── twitter-vision/       # X/Twitter link analyzer (oEmbed + fxtwitter + vision)
+│   └── example/              # Template skill for reference
+│
 ├── tools/                    # Tool registry (one submodule per domain)
-│   ├── vault.py              # read_vault, write_vault, sync_vault
+│   ├── __init__.py           # Merges all submodules into TOOL_DEFINITIONS + TOOL_HANDLERS
+│   ├── vault.py              # read_vault, write_vault, sync_vault, list_files
 │   ├── search.py             # search_vault_semantic (ChromaDB), search_timeline (SQLite)
-│   ├── http.py               # analyze_website (trafilatura)
-│   ├── browser_tools.py      # Playwright browser automation
+│   ├── http.py               # http_request (URLs, APIs, web scraping)
+│   ├── vision_analyze.py     # vision_analyze: URL / file path / base64 image analysis
+│   ├── skill_tools.py        # load_skill: activates a SKILLS.md skill into context
+│   ├── browser_tools.py      # Playwright browser automation (navigate, screenshot, close)
 │   ├── agent_tools.py        # Agent blackboard / subagent coordination
 │   ├── scheduler_tools.py    # Scheduled reminders and recurring tasks
 │   ├── notification_tools.py # Push notifications + clear_stop_order / set_pause_duration
 │   ├── session_status_tools.py # get_session_status: live Cognitive Brake dashboard
 │   ├── soul_tools.py         # write_soul_md: update Luna's cognitive architecture
-│   ├── proton_mail.py        # check_proton_mail / read_proton_email (IMAP via Bridge)
+│   ├── mental_state_tools.py # get_mental_state: DriftGovernor analysis
+│   ├── personality_tools.py  # update_personality: live persona adjustments
+│   ├── fluidity_tools.py     # set_fluidity: tone and language fluidity control
+│   ├── reaction_tools.py     # send_reaction: Telegram emoji reactions
+│   ├── resonance_tools.py    # Resonance layer: pattern recognition and mirroring
+│   ├── euphoria_engine.py    # Euphoria/flow state detection and modulation
+│   ├── music_tools.py        # Music state integration
+│   ├── automation_tools.py   # Vault-based automation rule engine
+│   ├── claim_tools.py        # Claim extraction and verification
+│   ├── scraping_tools.py     # Structured web scraping (trafilatura)
+│   ├── proton_mail.py        # Proton Mail via IMAP Bridge
 │   ├── gmail.py              # Gmail integration (OAuth)
 │   ├── calendar.py           # Google Calendar integration
-│   ├── twitter.py            # X/Twitter integration
-│   ├── automation_tools.py   # Vault-based automation rules
-│   ├── personality_tools.py  # Luna persona management
-│   ├── mental_state_tools.py # get_mental_state: DriftGovernor analysis
-│   └── moltbook.py           # Moltbook integration
+│   ├── twitter.py            # X/Twitter API (post, DM, timeline)
+│   ├── health.py             # Health data integration (steps, heart rate, sleep)
+│   ├── moltbook_sentinel.py  # Moltbook activity monitoring
+│   ├── moltbook_ignore.py    # Moltbook ignore list management
+│   └── document_tools.py     # Document parsing utilities
 │
 ├── agent.py                  # Subagent orchestration
 ├── automations.py            # Automation rule engine
+├── api_server.py             # Internal REST API server
+├── chat_bridge.py            # Cross-interface message bridge
 ├── hotline.py                # Voice-to-voice hotline (Twilio → Deepgram → LLM → ElevenLabs)
+├── voice_interface.py        # Voice input/output interface
+├── tts.py                    # Text-to-speech utilities
+├── browser.py                # Browser session management
 ├── notifications.py          # Push notification dispatcher
 ├── proactive.py              # Proactive message engine
 ├── scheduler.py              # Task scheduler
+├── reaction_bridge.py        # Telegram reaction event bridge
 │
 ├── requirements.txt
 ├── sovereign-link.service    # systemd unit (bot)

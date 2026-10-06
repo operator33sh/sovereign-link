@@ -397,6 +397,12 @@ def _build_system_prompt() -> str:
         base = _LANG + _SYSTEM_PROMPT_OVERRIDE
     else:
         persona = _personality.load_personality()
+        try:
+            import skills_loader as _sl
+            _skills_manifest = _sl.get_manifest()
+        except Exception:
+            _skills_manifest = ""
+
         base = (
             _LANG
             + persona
@@ -410,6 +416,7 @@ def _build_system_prompt() -> str:
             + _build_drift_tone_directive()
             + _load_acl()
             + _load_moltbook_credentials()
+            + _skills_manifest
         )
 
     _LANG_REMINDER = "\n\n---\n\nHERINNERING: Reageer ALTIJD in het Nederlands. Gebruik nooit Engels, tenzij de gebruiker dit expliciet vraagt."
