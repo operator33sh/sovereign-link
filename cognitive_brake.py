@@ -27,33 +27,6 @@ logger = logging.getLogger(__name__)
 # Tools that count as "complex" cognitive load
 # ---------------------------------------------------------------------------
 
-# Keywords that signal heavy psychological content in a user message
-_HEAVY_TOPIC_KEYWORDS = frozenset({
-    "trauma", "narcis", "narcisme", "narcissisme", "mishandeling", "misbruik",
-    "gaslighting", "familieconflict", "familiescène", "hechtingsstoornis",
-    "ptss", "ptsd", "dissociati", "suïcid", "suicid", "zelfmoord", "automutilat",
-    "schaduwwerk", "innerlijk kind", "seksueel misbruik", "emotioneel misbruik",
-    "parentificatie", "generatietrauma",
-})
-
-# Substrings that indicate cognitive fatigue, confusion, or self-doubt
-_FATIGUE_PATTERNS = (
-    "ik weet het niet meer",
-    "ik snap het niet",
-    "ik ben zo moe",
-    "kan niet meer nadenken",
-    "mijn hoofd staat",
-    "ik ben verward",
-    "ik twijfel aan mezelf",
-    "ik ben de kluts kwijt",
-    "overbelast",
-    "uitgeput",
-    "het is te veel",
-    "ik raak het kwijt",
-    "ik kan niet meer",
-    "ik ben leeg",
-)
-
 COMPLEX_TOOLS = frozenset({
     "search_vault_semantic",
     "spawn_agent",
@@ -76,45 +49,24 @@ _DEFAULT_LIMITS: dict = {
         "session_stop_minutes": 45,
         "complex_calls_per_window": 5,
         "window_seconds": 300,
-        # Emotional/cognitive triggers
-        "stabilisatie_streak_stop": 4,       # consecutive STABILISATIE detections
-        "heavy_topics_window_seconds": 900,  # 15-min sliding window
-        "heavy_topics_stop_count": 2,        # lower threshold: already in stress
-        "fatigue_window_seconds": 600,
-        "fatigue_stop_count": 2,
     },
     "EXPANSIE": {
         "session_warn_minutes": 75,
         "session_stop_minutes": 90,
         "complex_calls_per_window": 15,
         "window_seconds": 300,
-        "stabilisatie_streak_stop": 5,
-        "heavy_topics_window_seconds": 900,
-        "heavy_topics_stop_count": 3,
-        "fatigue_window_seconds": 600,
-        "fatigue_stop_count": 3,
     },
     "RECOVERY": {
         "session_warn_minutes": 40,
         "session_stop_minutes": 60,
         "complex_calls_per_window": 8,
         "window_seconds": 300,
-        "stabilisatie_streak_stop": 3,
-        "heavy_topics_window_seconds": 900,
-        "heavy_topics_stop_count": 2,
-        "fatigue_window_seconds": 600,
-        "fatigue_stop_count": 1,             # single fatigue signal triggers in RECOVERY
     },
     "NEUTRAAL": {
         "session_warn_minutes": 60,
         "session_stop_minutes": 120,
         "complex_calls_per_window": 12,
         "window_seconds": 300,
-        "stabilisatie_streak_stop": 4,
-        "heavy_topics_window_seconds": 900,
-        "heavy_topics_stop_count": 3,
-        "fatigue_window_seconds": 600,
-        "fatigue_stop_count": 2,
     },
 }
 
@@ -129,11 +81,6 @@ _stop_order_active: bool = False
 _warn_sent: bool = False
 _stop_sent: bool = False
 _monitor_thread: threading.Thread | None = None
-
-# Emotional / cognitive trigger state
-_stabilisatie_streak: int = 0          # consecutive STABILISATIE detections
-_heavy_topic_timestamps: list[float] = []  # timestamps of heavy-topic messages
-_fatigue_timestamps: list[float] = []      # timestamps of fatigue-signal messages
 
 # Pause enforcement
 _MIN_PAUSE_MINUTES: float = 15.0           # absolute floor — never overridable
@@ -158,7 +105,7 @@ _total_idle_banked_seconds: float = 0.0        # idle seconds permanently subtra
 
 def reset_session() -> None:
     """Reset all tracking state — call at the start of a new session."""
-    global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
+    global _session_start, _stop_order_active, _warn_sent, _stop_sent
     global _stop_order_activated_at, _required_pause_minutes, _timer_override_minutes
     global _last_activity_wall, _total_idle_banked_seconds
     with _lock:
@@ -166,9 +113,6 @@ def reset_session() -> None:
         _last_activity_wall = time.time()
         _total_idle_banked_seconds = 0.0
         _complex_call_timestamps.clear()
-        _heavy_topic_timestamps.clear()
-        _fatigue_timestamps.clear()
-        _stabilisatie_streak = 0
         _stop_order_active = False
         _warn_sent = False
         _stop_sent = False
@@ -214,7 +158,7 @@ def clear_stop_order() -> str:
     Returns a human-readable string describing the outcome — either the Stop
     Order was cleared or the pause has not been long enough yet.
     """
-    global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
+    global _session_start, _stop_order_active, _warn_sent, _stop_sent
     global _stop_order_activated_at, _required_pause_minutes
     global _last_activity_wall, _total_idle_banked_seconds
 
@@ -239,11 +183,8 @@ def clear_stop_order() -> str:
         _stop_order_active = False
         _warn_sent = False
         _stop_sent = False
-        _stabilisatie_streak = 0
         _stop_order_activated_at = None
         _complex_call_timestamps.clear()
-        _heavy_topic_timestamps.clear()
-        _fatigue_timestamps.clear()
     _save_session_state()
     _stop_rest_music()
     logger.info("CognitiveBrake: Stop Order cleared — session timer and counters reset")
@@ -340,45 +281,13 @@ def ensure_monitor_running() -> None:
 
 
 def record_mental_state(phase: str) -> None:
-    """Track the mental state detected for the current message.
-
-    Called from llm.run() after analyze_and_steer(). Increments the
-    STABILISATIE streak counter; any other phase resets it.
-    """
-    global _stabilisatie_streak
-    with _lock:
-        if phase == "STABILISATIE":
-            _stabilisatie_streak += 1
-        else:
-            _stabilisatie_streak = 0
-    logger.debug("CognitiveBrake: mental state=%s streak=%d", phase, _stabilisatie_streak)
+    """No-op — content-based Stop Order triggers have been removed."""
+    pass
 
 
 def record_message_content(message: str) -> None:
-    """Scan a user message for heavy psychological topics and fatigue signals.
-
-    Appends timestamps to the relevant sliding-window lists so that
-    _check_thresholds() can evaluate them on the next monitor tick.
-    """
+    """Bank idle time on each incoming message."""
     _bank_idle_if_needed()
-    lower = message.lower()
-    now = time.monotonic()
-
-    if any(kw in lower for kw in _HEAVY_TOPIC_KEYWORDS):
-        with _lock:
-            _heavy_topic_timestamps.append(now)
-        logger.debug("CognitiveBrake: heavy topic detected in message")
-
-    if any(pat in lower for pat in _FATIGUE_PATTERNS):
-        with _lock:
-            _fatigue_timestamps.append(now)
-        logger.debug("CognitiveBrake: fatigue signal detected in message")
-
-    # Immediately evaluate — content triggers should not wait for the 60s tick
-    try:
-        _check_thresholds()
-    except Exception:
-        logger.exception("CognitiveBrake: error in immediate content check")
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +491,7 @@ def _auto_release_stop_order() -> None:
     The release is atomic — state is cleared inside the lock before any
     side-effects (notification, music stop) are triggered.
     """
-    global _session_start, _stop_order_active, _warn_sent, _stop_sent, _stabilisatie_streak
+    global _session_start, _stop_order_active, _warn_sent, _stop_sent
     global _stop_order_activated_at, _required_pause_minutes
     global _last_activity_wall, _total_idle_banked_seconds
 
@@ -607,12 +516,9 @@ def _auto_release_stop_order() -> None:
         _stop_order_active = False
         _warn_sent = False
         _stop_sent = False
-        _stabilisatie_streak = 0
         _stop_order_activated_at = None
         _required_pause_minutes = _MIN_PAUSE_MINUTES
         _complex_call_timestamps.clear()
-        _heavy_topic_timestamps.clear()
-        _fatigue_timestamps.clear()
         released = True
 
     if not released:
@@ -734,8 +640,6 @@ def _check_thresholds() -> None:
     complex_calls = _complex_calls_in_window(cfg["window_seconds"])
 
     # Jev dimension scores provide a continuous scale factor [0.5, 1.5].
-    # Values < 1.0 tighten all thresholds (brake fires sooner);
-    # values > 1.0 loosen them (brake fires later).
     # User-set timer overrides are never scaled — they are intentional.
     scale = _jev_brake_scale()
 
@@ -748,28 +652,10 @@ def _check_thresholds() -> None:
         warn_min = cfg["session_warn_minutes"] * scale
     call_limit: int = cfg["complex_calls_per_window"]
 
-    # ── Trigger 1: Temporal / complex-call density ──────────────────────────
-    temporal_stop = minutes >= stop_min or complex_calls >= call_limit * 2
-    temporal_warn = minutes >= warn_min or complex_calls >= call_limit
-
-    # ── Trigger 2: Emotional — STABILISATIE streak or heavy topic density ───
-    streak_limit: int = max(1, round(cfg.get("stabilisatie_streak_stop", 4) * scale))
-    heavy_window: int = cfg.get("heavy_topics_window_seconds", 900)
-    heavy_limit: int = max(1, round(cfg.get("heavy_topics_stop_count", 3) * scale))
-    heavy_count = _count_in_window(_heavy_topic_timestamps, heavy_window)
-    emotional_stop = _stabilisatie_streak >= streak_limit or heavy_count >= heavy_limit
-
-    # ── Trigger 3: Cognitive fatigue ─────────────────────────────────────────
-    fatigue_window: int = cfg.get("fatigue_window_seconds", 600)
-    fatigue_limit: int = max(1, round(cfg.get("fatigue_stop_count", 2) * scale))
-    fatigue_count = _count_in_window(_fatigue_timestamps, fatigue_window)
-    cognitive_stop = fatigue_count >= fatigue_limit
-
-    # ── Determine cause label for notification message ───────────────────────
-    stop_triggered = temporal_stop or emotional_stop or cognitive_stop
+    # ── Trigger: Temporal / complex-call density ─────────────────────────────
+    stop_triggered = minutes >= stop_min or complex_calls >= call_limit * 2
 
     if stop_triggered:
-        # Atomically check-and-set to prevent double-fire from concurrent calls
         with _lock:
             if _stop_sent:
                 return
@@ -777,38 +663,14 @@ def _check_thresholds() -> None:
             _stop_sent = True
             _warn_sent = True
             _stop_order_activated_at = time.time()
-            # Raise pause duration based on Jev emotional activation — never lower
-            # a user-set override, but Jev can push it above the 15-min floor.
             jev_pause = _jev_pause_minutes()
             if jev_pause is not None:
                 _required_pause_minutes = max(_required_pause_minutes, jev_pause)
-                logger.info(
-                    "CognitiveBrake: Jev pause duration → %.0f min (jev=%.0f min)",
-                    _required_pause_minutes, jev_pause,
-                )
 
-        if emotional_stop:
-            if _stabilisatie_streak >= streak_limit:
-                cause = (
-                    f"Er zijn {_stabilisatie_streak} opeenvolgende hoog-stresssignalen "
-                    f"gedetecteerd in jouw berichten ({state} fase)."
-                )
-            else:
-                cause = (
-                    f"Er zijn {heavy_count} berichten met zware psychologische inhoud "
-                    f"gedetecteerd in de afgelopen {heavy_window // 60} minuten."
-                )
-        elif cognitive_stop:
-            cause = (
-                f"Er zijn {fatigue_count} signalen van cognitieve overbelasting "
-                f"(vermoeidheid/verwarring) gedetecteerd in de afgelopen {fatigue_window // 60} minuten."
-            )
-        else:
-            cause = (
-                f"Je bevindt je nu al {minutes_int} minuten in een intensieve sessie "
-                f"({state} fase)."
-            )
-
+        cause = (
+            f"Je bevindt je nu al {minutes_int} minuten in een intensieve sessie "
+            f"({state} fase)."
+        )
         _save_session_state()
         import datetime as _dt
         _release_time = _dt.datetime.now() + _dt.timedelta(minutes=_required_pause_minutes)
@@ -822,9 +684,8 @@ def _check_thresholds() -> None:
         )
         _start_rest_music()
         logger.warning(
-            "CognitiveBrake: Stop Order activated (%.1f min, %d complex calls, "
-            "streak=%d, heavy=%d, fatigue=%d, state=%s)",
-            minutes, complex_calls, _stabilisatie_streak, heavy_count, fatigue_count, state,
+            "CognitiveBrake: Stop Order activated (%.1f min, %d complex calls, state=%s)",
+            minutes, complex_calls, state,
         )
         return
 
