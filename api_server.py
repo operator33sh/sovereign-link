@@ -30,17 +30,11 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-import cognitive_brake
 import context
 import llm
 from session_logger import session_logger
 
 app = FastAPI(title="Sovereign Link API", version="1.0.0")
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    cognitive_brake.ensure_monitor_running()
 
 
 app.add_middleware(

@@ -5,8 +5,6 @@ import re
 import threading
 from datetime import datetime
 
-import cognitive_brake
-
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -421,27 +419,6 @@ def _build_system_prompt() -> str:
 
     _LANG_REMINDER = "\n\n---\n\nHERINNERING: Reageer ALTIJD in het Nederlands. Gebruik nooit Engels, tenzij de gebruiker dit expliciet vraagt."
 
-    stop_order_block = ""
-    if cognitive_brake.stop_order_active():
-        stop_order_block = (
-            "\n\n---\n\n"
-            "## 🛑 STOP ORDER — COGNITIEVE REM ACTIEF\n\n"
-            "De Cognitive Brake heeft een Stop Order uitgevaardigd. "
-            "De gebruiker heeft te lang intensief gewerkt en loopt risico op cognitieve overbelasting.\n\n"
-            "**Geforceerde infrastructuurbeperkingen (niet onderhandelbaar):**\n"
-            "- Alle complexe tools zijn op infrastructuurniveau geblokkeerd. "
-            "Alleen `clear_stop_order` en `get_session_status` zijn beschikbaar.\n"
-            "- Elke poging een geblokkeerde tool aan te roepen wordt door het systeem geweigerd — "
-            "je kunt dit niet omzeilen.\n\n"
-            "**Jouw gedrag:**\n"
-            "- Stel geen nieuwe analyses, vault-searches of complexe taken voor.\n"
-            "- Beantwoord eenvoudige vragen beknopt — initieer geen nieuw onderzoek.\n"
-            "- Als de gebruiker bevestigt dat hij heeft gerust, roep je `clear_stop_order` aan. "
-            "Het systeem controleert automatisch of de vereiste pauzetijd verstreken is en "
-            "meldt hoeveel tijd er nog resteert als dat niet het geval is.\n\n"
-            "De rust van de gebruiker heeft nu absolute prioriteit boven elke taak."
-        )
-
     try:
         import fluidity as _fl
         _fluidity_directive = _fl.build_system_directive()
@@ -451,10 +428,10 @@ def _build_system_prompt() -> str:
     try:
         from proactive import user_status
         if user_status.is_sleeping():
-            return base + _NIGHT_MODE_ADDENDUM + stop_order_block + _fluidity_directive + _LANG_REMINDER
+            return base + _NIGHT_MODE_ADDENDUM + _fluidity_directive + _LANG_REMINDER
     except Exception:
         pass
-    return base + stop_order_block + _fluidity_directive + _LANG_REMINDER
+    return base + _fluidity_directive + _LANG_REMINDER
 
 def _parse_kv_body(body: str) -> dict:
     """Parse unquoted 'key:value,key:{nested:value}' format emitted by some models."""
@@ -576,24 +553,10 @@ def _run_tool_loop(messages: list, max_iter: int = 20, cancel_event: threading.E
             _tc_results: list[str] = []
             for tc in tool_calls:
                 fn_name = tc["function"]["name"]
-                cognitive_brake.record_complex_call(fn_name)
                 try:
                     fn_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     fn_args = {}
-                # Hard enforcement: block all non-allowed tools during an active Stop Order.
-                # This is a second layer of defense — the first is that these tools are
-                # not sent as definitions to the LLM in _chat().
-                if cognitive_brake.stop_order_active() and fn_name not in _STOP_ORDER_ALLOWED_TOOLS:
-                    result = (
-                        f"⛔ Tool '{fn_name}' is geblokkeerd door een actieve Stop Order. "
-                        "Alle analyses en complexe acties zijn gepauzeerd totdat de Stop Order "
-                        "is vrijgegeven via clear_stop_order."
-                    )
-                    context.add_tool_result(tc["id"], result)
-                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-                    _tc_results.append(result)
-                    continue
                 handler = TOOL_HANDLERS.get(fn_name)
                 try:
                     result = handler(fn_args) if handler else f"Error: unknown tool '{fn_name}'"
@@ -651,12 +614,6 @@ _client = httpx.Client(
 _MAX_CHARS = 700_000  # ~200k tokens @ 3.5 chars/token — leaves headroom under 262k limit
 _TOOL_RESULT_CAP = 8_000  # max chars per tool result kept in history
 
-# Tools that remain available during an active Stop Order.
-# All other tools are blocked at both the definition level (not sent to LLM)
-# and the execution level (call intercepted and refused).
-_STOP_ORDER_ALLOWED_TOOLS = frozenset({"clear_stop_order", "get_session_status"})
-
-
 def _trim_messages(messages: list) -> list:
     """Truncate tool results and drop oldest messages to stay within context limit."""
     # First pass: cap individual tool message content (Evidence-Preserving Reducer)
@@ -702,18 +659,10 @@ def _inject_lang_reminder(messages: list) -> list:
 
 
 def _chat(messages: list) -> dict:
-    if cognitive_brake.stop_order_active():
-        active_tools = [
-            t for t in CORE_TOOL_DEFINITIONS
-            if t.get("function", {}).get("name") in _STOP_ORDER_ALLOWED_TOOLS
-        ]
-    else:
-        active_tools = CORE_TOOL_DEFINITIONS
-
     payload = {
         "model": MODEL,
         "messages": _inject_lang_reminder(_trim_messages(messages)),
-        "tools": active_tools,
+        "tools": CORE_TOOL_DEFINITIONS,
         "stream": False,
         "max_tokens": 8192,
         "options": {"num_ctx": 20480},
@@ -747,18 +696,10 @@ def _chat_streaming(messages: list, chunk_queue, cancel_event=None) -> dict:
 
     Returns a dict compatible with _chat() so _run_tool_loop can use it uniformly.
     """
-    if cognitive_brake.stop_order_active():
-        active_tools = [
-            t for t in CORE_TOOL_DEFINITIONS
-            if t.get("function", {}).get("name") in _STOP_ORDER_ALLOWED_TOOLS
-        ]
-    else:
-        active_tools = CORE_TOOL_DEFINITIONS
-
     payload = {
         "model": MODEL,
         "messages": _inject_lang_reminder(_trim_messages(messages)),
-        "tools": active_tools,
+        "tools": CORE_TOOL_DEFINITIONS,
         "stream": True,
         "max_tokens": 8192,
         "options": {"num_ctx": 20480},
@@ -1046,7 +987,7 @@ def transcribe_audio_full(file_path: str) -> tuple[str, float]:
 
 
 def _run_mental_state_analysis(user_message: str, history: list) -> None:
-    """Run analyze_and_steer and feed the result to cognitive_brake.
+    """Run analyze_and_steer to update the ACL.
 
     Called inline when Jev is enabled (fast path, ~50ms) so the ACL update
     lands before _build_system_prompt() reads it.  Called in a background
@@ -1054,9 +995,8 @@ def _run_mental_state_analysis(user_message: str, history: list) -> None:
     is not blocked — the ACL update will be visible in the next turn.
     """
     try:
-        from mental_state_analyzer import analyze_and_steer, current_phase
+        from mental_state_analyzer import analyze_and_steer
         analyze_and_steer(user_message, history=history)
-        cognitive_brake.record_mental_state(current_phase())
     except Exception:
         logger.debug("_run_mental_state_analysis: suppressed exception", exc_info=True)
 
@@ -1124,35 +1064,7 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
     global _personality_seeded
     is_first = not context.get_history()  # check before add_message
 
-    cognitive_brake.ensure_monitor_running()
-
-    # Auto-release the Stop Order on every message if the required pause has elapsed.
-    # The monitor thread does this too, but only every 60 s — this closes the gap.
-    cognitive_brake._auto_release_stop_order()
-
     context.add_message("user", user_message)
-
-    # Hard enforcement: when a Stop Order is active the LLM is never called.
-    # Release is timer-only — no manual override is possible.
-    if cognitive_brake.stop_order_active():
-        remaining = cognitive_brake.pause_remaining_minutes()
-        if remaining <= 0:
-            # Edge case: pause elapsed but the 60-second monitor tick hasn't fired yet.
-            # Release inline so this message is processed normally.
-            cognitive_brake._auto_release_stop_order()
-        if cognitive_brake.stop_order_active():
-            # Pause still running — enforce the wall.
-            remaining = cognitive_brake.pause_remaining_minutes()
-            from datetime import timedelta
-            release_at = (datetime.now(tz=_get_local_tz()) + timedelta(minutes=remaining)).strftime("%H:%M")
-            msg = (
-                f"🛑 **Stop Order actief** — de cognitieve rem is ingeschakeld. "
-                f"Nog **{remaining:.0f} minuten** pauze vereist (opheffing om ~{release_at}). "
-                f"Nieuwe taken en analyses zijn geblokkeerd."
-            )
-            context.add_message("assistant", msg)
-            return msg
-        # Stop Order was released inline — fall through to normal LLM processing
 
     # Seed the default personality profile on first-ever message if missing.
     if not _personality_seeded:
@@ -1180,7 +1092,6 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
             t.start()
     except Exception:
         pass  # never let the analyzer crash the main chat flow
-    cognitive_brake.record_message_content(user_message)
 
     if msg_timestamp is not None:
         ts_local = msg_timestamp.astimezone(_get_local_tz())

@@ -48,20 +48,6 @@ The philosophical framework lives at **[Fractalisme.nl](https://fractalisme.nl)*
 
 ---
 
-## What it protects
-
-Sovereign Link has a built-in cognitive brake — not marketing, but technical infrastructure.
-
-If you work too long, too intensively, or the system detects heavy psychological topics, a **Stop Order** activates automatically. Analyses are blocked. Complex tools are locked. Luna asks if you're doing okay.
-
-Only when you confirm you've rested does it open back up.
-
-The thresholds are configurable. They're stricter when you're in a stress phase. And if you signal that you're in flow, they're temporarily raised — so the brake doesn't fire too early.
-
-**Your rest takes priority over every task.**
-
----
-
 ## Navigation
 
 - [For users — what can you do with it?](#what-is-this)
@@ -168,7 +154,6 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
                    │         └──► timeline.py ──► SQLite (date / keyword search)
                    │         └──► Obsidian Vault ──► source of proof (plain Markdown)
                    │
-                   └──► cognitive_brake.py ──► Stop Order Monitor
                    └──► drift_governor.py ──► Mental state / tone calibration
                    └──► skills_loader.py ──► SKILLS.md scanner + manifest injector
 ```
@@ -196,8 +181,7 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
 | 🗃️ **SQLite Timeline** | Parallel index for reliable date-based queries. FTS5 full-text search combined with date filters. |
 | ⚙️ **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights, write structured `SovereignLog` files, and commit everything to git. |
 | **Active Context Layer (ACL)** | A dynamic briefing file (`.system/active_briefing.md`) that steers AI behaviour based on the user's current operational state. |
-| 🛑 **Cognitive Brake** | Background monitor (`cognitive_brake.py`) that tracks session duration, tool-call intensity, heavy psychological topics, and fatigue signals. Activates a **Stop Order** that blocks all analytical tools until a confirmed rest period has elapsed. Thresholds are phase-aware and configurable via `.system/cognitive_limits.json`. **Dynamic Override** raises thresholds +50% on positive flow signals. |
-| 🧬 **SOUL.md** | Luna's cognitive architecture kernel — injected into every system prompt. Defines identity, behavioural mechanisms, and the Stop Order protocol. Versioned in an Evolution Log within the file itself. |
+| 🧬 **SOUL.md** | Luna's cognitive architecture kernel — injected into every system prompt. Defines identity and behavioural mechanisms. Versioned in an Evolution Log within the file itself. |
 | 🎯 **DriftGovernor** | Emotional state tracker (`drift_governor.py`) that modulates Luna's tone based on mental state signals. Drives the `update_personality` tool and anti-cliché fluidity layer. |
 
 ### Layer 4 — Skills
@@ -223,7 +207,6 @@ sovereign-link/
 ├── main.py                   # Entry point
 ├── bot.py                    # Telegram handlers and command routing
 ├── llm.py                    # Ollama LLM client, tool call loop, audio transcription
-├── cognitive_brake.py        # Cognitive Brake: session monitor, Stop Order, Dynamic Override
 ├── context.py                # In-memory conversation history
 ├── memory_manager.py         # Sovereign Memory Engine (Extract→Synthesize→Store→Sync)
 ├── vector.py                 # ChromaDB + Ollama embedding + filesystem watcher
@@ -253,8 +236,8 @@ sovereign-link/
 │   ├── browser_tools.py      # Playwright browser automation (navigate, screenshot, close)
 │   ├── agent_tools.py        # Agent blackboard / subagent coordination
 │   ├── scheduler_tools.py    # Scheduled reminders and recurring tasks
-│   ├── notification_tools.py # Push notifications + clear_stop_order / set_pause_duration
-│   ├── session_status_tools.py # get_session_status: live Cognitive Brake dashboard
+│   ├── notification_tools.py # Push notifications
+│   ├── session_status_tools.py # get_session_status: live session / mental-state dashboard
 │   ├── soul_tools.py         # write_soul_md: update Luna's cognitive architecture
 │   ├── mental_state_tools.py # get_mental_state: DriftGovernor analysis
 │   ├── personality_tools.py  # update_personality: live persona adjustments

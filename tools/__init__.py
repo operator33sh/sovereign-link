@@ -76,10 +76,6 @@ _CORE_NAMES = {
     "x_post_tweet", "x_get_tweets", "x_send_dm", "x_get_dms",
     # Cognitive architecture
     "write_soul_md",
-    # Cognitive brake
-    "clear_stop_order",
-    "set_pause_duration",
-    "set_session_timer",
     # Session dashboard
     "get_session_status",
     # Fluidity Layer

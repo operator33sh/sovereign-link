@@ -32,7 +32,7 @@ def decide_sync(state: str, questions: dict) -> dict | None:
     """
     Synchronous version of decide() using httpx.Client.
 
-    Use in synchronous call paths (e.g. mental_state_analyzer, cognitive_brake).
+    Use in synchronous call paths (e.g. mental_state_analyzer).
     Never raises — returns None on any failure.
     """
     if not ENABLED:
