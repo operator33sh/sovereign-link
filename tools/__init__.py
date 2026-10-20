@@ -70,6 +70,9 @@ _CORE_NAMES = {
     "get_steps", "get_heart_rate", "get_sleep", "get_activity_summary",
     # Personality & scheduling
     "update_personality", "schedule_task",
+    "list_scheduled_tasks", "cancel_scheduled_task",
+    # Automations (recurring schedules)
+    "list_automations", "toggle_automation", "delete_automation",
     # Web
     "http_request",
     # X (Twitter)
