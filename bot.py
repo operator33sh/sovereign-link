@@ -567,17 +567,22 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         tg_file = await ctx.bot.get_file(tg_file_id)
         tmp_path = os.path.join(AUDIO_TMP_DIR, f"{tg_file_id}{extension}")
         await tg_file.download_to_drive(tmp_path)
+        logger.info("Audiobericht ontvangen: %s (%d bytes)", tmp_path, os.path.getsize(tmp_path))
 
         transcription = await asyncio.to_thread(llm.transcribe_audio, tmp_path)
+        logger.info("Transcriptie (%d tekens): %r", len(transcription), transcription[:200])
+
+        if not transcription:
+            # Keep the file so the empty transcription can be reproduced
+            logger.warning("Lege transcriptie — audiobestand bewaard op %s", tmp_path)
+            typing_task.cancel()
+            await update.message.reply_text("Kon geen tekst uit het audiobericht halen.")
+            return
+
         try:
             os.remove(tmp_path)
         except Exception:
             pass
-
-        if not transcription:
-            typing_task.cancel()
-            await update.message.reply_text("Kon geen tekst uit het audiobericht halen.")
-            return
 
         _loop = asyncio.get_event_loop()
         chat_bridge.set_sender(_make_sender(update, _loop))
@@ -599,6 +604,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             cancel_event.set()
             logger.error("LLM run() timed out na %.0fs voor audiobericht", LLM_TIMEOUT)
             reply = "Het antwoord duurde te lang. Probeer het opnieuw."
+        logger.info("LLM-antwoord voor audiobericht: %d tekens", len(reply or ""))
 
         typing_task.cancel()
         await update.message.reply_text(
