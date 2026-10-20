@@ -40,7 +40,6 @@ from tools.calendar import DEFINITIONS as _cld, HANDLERS as _clh
 from tools.scraping_tools import DEFINITIONS as _scrd, HANDLERS as _scrh
 from tools.claim_tools import DEFINITIONS as _ctd, HANDLERS as _cth
 from tools.moltbook_ignore import DEFINITIONS as _mid, HANDLERS as _mih
-from tools.mental_state_tools import DEFINITIONS as _mntd, HANDLERS as _mnth
 from tools.twitter import DEFINITIONS as _twd, HANDLERS as _twh
 from tools.soul_tools import DEFINITIONS as _sld, HANDLERS as _slh
 from tools.session_status_tools import DEFINITIONS as _ssd, HANDLERS as _ssh
@@ -54,7 +53,7 @@ from tools.vision_analyze import DEFINITIONS as _vad, HANDLERS as _vah
 
 # Search tools (_sd) placed last so they survive context-window truncation.
 # Vault tools (_vd) second-to-last for the same reason.
-TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _mntd + _twd + _sld + _ssd + _pmd + _eed + _mtd + _fld + _rxd + _skd + _vad + _vd + _sd
+TOOL_DEFINITIONS: list[dict] = _hd + _bd + _ad + _nd + _scd + _aud + _pd + _rd + _msd + _hld + _gmd + _cld + _scrd + _ctd + _mid + _twd + _sld + _ssd + _pmd + _eed + _mtd + _fld + _rxd + _skd + _vad + _vd + _sd
 
 _CORE_NAMES = {
     # Vault
@@ -97,7 +96,7 @@ CORE_TOOL_DEFINITIONS: list[dict] = [
 ]
 
 TOOL_HANDLERS: dict[str, callable] = {
-    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_mnth, **_twh, **_slh, **_ssh, **_pmh, **_eeh, **_mth, **_flh, **_rxh, **_skh, **_vah,
+    **_vh, **_hh, **_sh, **_bh, **_ah, **_nh, **_sch, **_auh, **_ph, **_rh, **_msh, **_hlh, **_gmh, **_clh, **_scrh, **_cth, **_mih, **_twh, **_slh, **_ssh, **_pmh, **_eeh, **_mth, **_flh, **_rxh, **_skh, **_vah,
 }
 
 # Sub-agents do not get write_vault — they must use write_temp → commit_to_vault

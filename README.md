@@ -182,7 +182,6 @@ Telegram ──► bot.py ──► llm.py ──► Ollama-compatible API (LLM)
 | ⚙️ **Sovereign Memory Engine** | Autonomous background agents that scan conversations for High-Value Insights, write structured `SovereignLog` files, and commit everything to git. |
 | **Active Context Layer (ACL)** | A dynamic briefing file (`.system/active_briefing.md`) that steers AI behaviour based on the user's current operational state. |
 | 🧬 **SOUL.md** | Luna's cognitive architecture kernel — injected into every system prompt. Defines identity and behavioural mechanisms. Versioned in an Evolution Log within the file itself. |
-| 🎯 **DriftGovernor** | Emotional state tracker (`drift_governor.py`) that modulates Luna's tone based on mental state signals. Drives the `update_personality` tool and anti-cliché fluidity layer. |
 
 ### Layer 4 — Skills
 
@@ -213,7 +212,6 @@ sovereign-link/
 ├── timeline.py               # SQLite timeline index: date/FTS5 search across vault
 ├── ingest.py                 # Vault indexer: --rescan (full), --backfill (fix dates)
 ├── drift_governor.py         # Mental state tracker + tone calibration
-├── mental_state_analyzer.py  # Emotional signal detection and state classification
 ├── fluidity.py               # Anti-cliché fluidity layer for natural language output
 ├── personality.py            # Luna persona management and persistence
 ├── skills_loader.py          # SKILLS.md scanner: discovers skills, builds system prompt manifest
@@ -237,9 +235,8 @@ sovereign-link/
 │   ├── agent_tools.py        # Agent blackboard / subagent coordination
 │   ├── scheduler_tools.py    # Scheduled reminders and recurring tasks
 │   ├── notification_tools.py # Push notifications
-│   ├── session_status_tools.py # get_session_status: live session / mental-state dashboard
+│   ├── session_status_tools.py # get_session_status: live session dashboard
 │   ├── soul_tools.py         # write_soul_md: update Luna's cognitive architecture
-│   ├── mental_state_tools.py # get_mental_state: DriftGovernor analysis
 │   ├── personality_tools.py  # update_personality: live persona adjustments
 │   ├── fluidity_tools.py     # set_fluidity: tone and language fluidity control
 │   ├── reaction_tools.py     # send_reaction: Telegram emoji reactions

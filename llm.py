@@ -313,68 +313,6 @@ def _load_moltbook_credentials() -> str:
     return ""
 
 
-def _build_drift_tone_directive() -> str:
-    """Generate a tone directive from the current DriftGovernor state.
-
-    Returns "" when all dimensions are near baseline (no adjustment needed),
-    keeping the system prompt clean during normal operation.
-
-    Thresholds (chosen so baseline values never trigger):
-      emotional_activation > 0.65  → calm/short tone (baseline: 0.3)
-      groundedness < 0.45          → grounding language (baseline: 0.8)
-      clarity < 0.45               → extra concise (baseline: 0.8)
-      biological_landing_triggered → maximum rest mode
-    """
-    try:
-        from mental_state_analyzer import drift_report
-        report = drift_report()
-        if not report:
-            return ""
-        state = report.get("current_state", {})
-        activation = state.get("emotional_activation", 0.3)
-        groundedness = state.get("groundedness", 0.8)
-        clarity = state.get("clarity", 0.8)
-
-        if report.get("biological_landing_triggered", False):
-            return (
-                "\n\n---\n\n"
-                "## 🚨 Biologische Landing — Maximale Rustmodus\n\n"
-                "De DriftGovernor heeft een biologische landing gedetecteerd — "
-                "de gebruiker bevindt zich in een toestand van diepe uitputting of overprikkeling. "
-                "Hanteer absolute minimale respons: één à twee korte zinnen, geen taken, "
-                "geen analyses, geen voorstellen. Rust staat boven alles."
-            )
-
-        lines = []
-        if activation > 0.65:
-            lines.append(
-                f"- **Hoge emotionele activatie** ({activation:.2f}): gebruik een kalme, rustige toon. "
-                "Korte zinnen. Vermijd analytische lijsten of uitgebreide plannen tenzij expliciet gevraagd."
-            )
-        if groundedness < 0.45:
-            lines.append(
-                f"- **Lage grounding** ({groundedness:.2f}): gebruik aardende, stabiele taal. "
-                "Eenvoudige structuur. Geen overweldigende hoeveelheid informatie in één respons."
-            )
-        if clarity < 0.45:
-            lines.append(
-                f"- **Verminderde helderheid** ({clarity:.2f}): wees extra beknopt en direct. "
-                "Vermijd complexe redeneerketens of veel stappen tegelijk."
-            )
-
-        if not lines:
-            return ""
-
-        return (
-            "\n\n---\n\n"
-            "## DriftGovernor — Toonaanpassing\n\n"
-            "_Automatisch gegenereerd op basis van geobserveerde cognitieve dimensies._\n\n"
-            + "\n".join(lines)
-        )
-    except Exception:
-        return ""
-
-
 def _build_system_prompt() -> str:
     """
     Build the full system prompt for this LLM call.
@@ -411,7 +349,6 @@ def _build_system_prompt() -> str:
             + _SCRAPING_PROTOCOL
             + _REACTION_PROTOCOL
             + _load_soul()
-            + _build_drift_tone_directive()
             + _load_acl()
             + _load_moltbook_credentials()
             + _skills_manifest
@@ -986,21 +923,6 @@ def transcribe_audio_full(file_path: str) -> tuple[str, float]:
     return text, round(confidence, 3)
 
 
-def _run_mental_state_analysis(user_message: str, history: list) -> None:
-    """Run analyze_and_steer to update the ACL.
-
-    Called inline when Jev is enabled (fast path, ~50ms) so the ACL update
-    lands before _build_system_prompt() reads it.  Called in a background
-    thread when Jev is disabled (LLM fallback, ~20s) so the main LLM call
-    is not blocked — the ACL update will be visible in the next turn.
-    """
-    try:
-        from mental_state_analyzer import analyze_and_steer
-        analyze_and_steer(user_message, history=history)
-    except Exception:
-        logger.debug("_run_mental_state_analysis: suppressed exception", exc_info=True)
-
-
 _AUTONOMOUS_TRIGGER = (
     "SYSTEM EVENT: A background agent has just completed its task. "
     "The completion notification with the vault report path has been injected above. "
@@ -1070,28 +992,6 @@ def run(user_message: str, msg_timestamp: "datetime | None" = None, cancel_event
     if not _personality_seeded:
         _personality.ensure_seeded()
         _personality_seeded = True
-
-    # Analyze mental state and update ACL.
-    # When Jev is enabled (~50ms): run inline so the ACL update lands before
-    # _build_system_prompt() reads it.
-    # When Jev is disabled (LLM fallback, ~20s): run in a daemon thread so
-    # the main LLM call starts immediately — ACL/DriftGovernor will update
-    # async and the effect is visible from the next turn onward.
-    try:
-        import jev as _jev_mod
-        _history_snapshot = context.get_history()
-        if _jev_mod.ENABLED:
-            _run_mental_state_analysis(user_message, _history_snapshot)
-        else:
-            t = threading.Thread(
-                target=_run_mental_state_analysis,
-                args=(user_message, _history_snapshot),
-                daemon=True,
-                name="msa-llm-fallback",
-            )
-            t.start()
-    except Exception:
-        pass  # never let the analyzer crash the main chat flow
 
     if msg_timestamp is not None:
         ts_local = msg_timestamp.astimezone(_get_local_tz())
